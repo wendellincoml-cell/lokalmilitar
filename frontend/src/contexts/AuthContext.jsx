@@ -5,7 +5,19 @@ const AuthCtx = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(undefined); // undefined = loading
-  const [bg, setBg] = useState(localStorage.getItem("system_background_color") || "#F5F5F5");
+  const [bg, setBg] = useState(localStorage.getItem("system_background_color") || "#F5F0E6");
+  const [panel, setPanel] = useState(localStorage.getItem("system_panel_color") || "#FBF9F4");
+
+  useEffect(() => {
+    const dark = panel === "#1E1E1E";
+    document.documentElement.style.setProperty("--panel-bg", panel);
+    document.documentElement.style.setProperty("--panel-fg", dark ? "#F2EEE6" : "#111111");
+  }, [panel]);
+
+  const applyPanel = (color) => {
+    setPanel(color);
+    localStorage.setItem("system_panel_color", color);
+  };
 
   useEffect(() => {
     document.documentElement.style.setProperty("--system-bg-color", bg);
@@ -21,6 +33,10 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem("lokal_token");
     if (!token) { setUser(null); return; }
     api.get("/auth/me").then((r) => setUser(r.data)).catch(() => { setUser(null); localStorage.removeItem("lokal_token"); });
+    api.get("/settings").then((r) => {
+      if (r.data.background_color) applyBg(r.data.background_color);
+      if (r.data.panel_color) applyPanel(r.data.panel_color);
+    }).catch(() => {});
   }, []);
 
   const login = async (email, password) => {
@@ -37,7 +53,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthCtx.Provider value={{ user, login, logout, bg, applyBg }}>
+    <AuthCtx.Provider value={{ user, login, logout, bg, applyBg, panel, applyPanel }}>
       {children}
     </AuthCtx.Provider>
   );

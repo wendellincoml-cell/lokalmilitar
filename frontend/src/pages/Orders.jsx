@@ -3,6 +3,7 @@ import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
 import { Plus, Edit, Trash2, Printer, FileText } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
 
 const BLANK_ORDER = {
@@ -17,6 +18,7 @@ export default function Orders({ mode }) {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [settings, setSettings] = useState({});
+  const [vendors, setVendors] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [printing, setPrinting] = useState(null);
@@ -25,10 +27,10 @@ export default function Orders({ mode }) {
   const [reportFilter, setReportFilter] = useState({ from: "", to: "", type: "ALL" });
 
   const load = async () => {
-    const [o, p, c, s] = await Promise.all([
-      api.get("/orders"), api.get("/products"), api.get("/customers"), api.get("/settings"),
+    const [o, p, c, s, v] = await Promise.all([
+      api.get("/orders"), api.get("/products"), api.get("/customers"), api.get("/settings"), api.get("/vendors"),
     ]);
-    setOrders(o.data); setProducts(p.data); setCustomers(c.data); setSettings(s.data);
+    setOrders(o.data); setProducts(p.data); setCustomers(c.data); setSettings(s.data); setVendors(v.data);
   };
   useEffect(() => { load(); }, []);
 
@@ -68,8 +70,12 @@ export default function Orders({ mode }) {
       returned_items: [...(order.returned_items||[]), ...linked.flatMap(l => (l.returned_items||[]).map(r => ({ ...r, reason: `${r.reason||""} (#${l.number})` })))],
       exchanged_items: [...(order.exchanged_items||[]), ...linked.filter(l => l.type==="TROCA").flatMap(l => (l.items||[]).map(r => ({ ...r, reason: `Item entregue na troca #${l.number}` })))],
     };
-    setPrinting(merged); setPrintMode(mode);
-    setTimeout(()=> { window.print(); }, 150);
+    const original = orders.find(o => o.id === order.original_order_id);
+    setPrinting({ ...merged, original_number: original?.number }); setPrintMode(mode);
+  };
+  const runPrint = (pdf) => {
+    if (pdf) toast.info("Na janela de impressão, escolha 'Salvar como PDF' como destino");
+    setTimeout(() => window.print(), pdf ? 600 : 50);
   };
 
   const filteredReport = () => {
@@ -107,17 +113,17 @@ export default function Orders({ mode }) {
 
   return (
     <div data-testid="orders-page">
-      <header className="flex items-center justify-between flex-wrap gap-2 mb-4">
-        <h1 className="lokal-stencil text-2xl">{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1>
+      <header className="lm-page-head flex items-end justify-between flex-wrap gap-2">
+        <div><h1>{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1><p>{isTrocas ? "Trocas vinculadas a pedidos ou avulsas" : "Estoque e comissão são lançados quando o pedido fica Aprovado, Separado ou Entregue"}</p></div>
         <div className="flex gap-2">
-          <button className="px-3 py-2 border rounded-sm text-sm flex items-center gap-1" onClick={()=>setReportOpen(true)} data-testid="btn-report">
+          <button className="lm-btn lm-btn-dark" onClick={()=>setReportOpen(true)} data-testid="btn-report">
             <FileText size={14}/>Relatórios de Saídas
           </button>
-          <button className="lokal-btn-primary flex items-center gap-1" onClick={openNew} data-testid="btn-new-order"><Plus size={14}/>{isTrocas ? "NOVA TROCA/DEVOLUÇÃO" : "NOVO PEDIDO"}</button>
+          <button className="lm-btn lm-btn-olive" onClick={openNew} data-testid="btn-new-order"><Plus size={14}/>{isTrocas ? "NOVA TROCA/DEVOLUÇÃO" : "NOVO PEDIDO"}</button>
         </div>
       </header>
 
-      <div className="lokal-panel overflow-x-auto">
+      <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">
           <thead className="bg-neutral-100 text-[11px]">
             <tr><th className="p-2">#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>Ações</th></tr>
@@ -154,6 +160,26 @@ export default function Orders({ mode }) {
         {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
       </div>
 
+      <Dialog open={!!printing} onOpenChange={(o) => !o && setPrinting(null)}>
+        <DialogContent className="max-w-[900px] w-[95vw] max-h-[92vh] overflow-y-auto no-print" data-testid="print-preview">
+          <DialogHeader><DialogTitle className="font-head">Pré-visualização · Pedido #{printing?.number}</DialogTitle></DialogHeader>
+          <div className="flex flex-wrap gap-2">
+            <div className="lm-seg">
+              <button className={printMode==="a4" ? "on" : ""} onClick={() => setPrintMode("a4")} data-testid="preview-mode-a4">A4</button>
+              <button className={printMode==="80" ? "on" : ""} onClick={() => setPrintMode("80")} data-testid="preview-mode-80">Térmica 80mm</button>
+            </div>
+            <button className="lm-btn lm-btn-olive" onClick={() => runPrint(false)} data-testid="preview-print"><Printer size={15}/>Imprimir</button>
+            <button className="lm-btn lm-btn-gold" onClick={() => runPrint(true)} data-testid="preview-pdf"><FileText size={15}/>Salvar PDF</button>
+          </div>
+          <div className="bg-neutral-300 p-4 rounded flex justify-center overflow-x-auto">
+            <div className="shadow-lg">
+              {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)}/>}
+              {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Editor Sheet */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="w-full md:max-w-4xl overflow-y-auto">
@@ -189,6 +215,16 @@ export default function Orders({ mode }) {
                 {!editing.customer_id && <input className="input mt-2" placeholder="Nome livre (sem cadastro)" value={editing.customer_name} onChange={e=>setEditing({...editing, customer_name:e.target.value})}/>}
               </label>
 
+              <label><div className="text-[11px] font-mono text-neutral-500">Vendedor</div>
+                <select className="input" value={editing.vendor_id||""} onChange={e=>{
+                  const v = vendors.find(x=>x.id===e.target.value);
+                  setEditing({...editing, vendor_id:e.target.value, vendor_name:v?.name||""});
+                }} data-testid="order-vendor">
+                  <option value="">— Usuário logado —</option>
+                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </label>
+
               {editing.type!=="VENDA" && editing.type!=="ORCAMENTO" && (
                 <div className="border p-2 bg-amber-50">
                   <label className="flex items-center gap-2 text-sm">
@@ -219,7 +255,10 @@ export default function Orders({ mode }) {
                       <option value="">— Produto —</option>
                       {products.map(p=><option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
                     </select>
-                    <input className="input col-span-2" placeholder="Tam" value={it.size||""} onChange={e=>setItem(i,{size:e.target.value})}/>
+                    <select className="input col-span-2" value={it.size||""} onChange={e=>setItem(i,{size:e.target.value})} data-testid={`item-size-${i}`}>
+                      <option value="">Tam</option>
+                      {(prodById[it.product_id]?.sizes||[]).map(s=><option key={s.size} value={s.size}>{s.size} ({s.stock})</option>)}
+                    </select>
                     <input className="input col-span-1" type="number" placeholder="Qtd" value={it.qty} onChange={e=>setItem(i,{qty:Number(e.target.value)})}/>
                     <input className="input col-span-2" type="number" step="0.01" placeholder="Vl Unit" value={it.unit_price} onChange={e=>setItem(i,{unit_price:Number(e.target.value)})}/>
                     <div className="col-span-1 text-xs text-right">{formatBRL(it.qty*it.unit_price)}</div>
@@ -268,9 +307,7 @@ export default function Orders({ mode }) {
                 <div className="flex gap-2">
                   {editing.id && (
                     <>
-                      <button className="px-3 py-2 border rounded-sm text-sm flex items-center gap-1" onClick={()=>doPrint(editing,"a4")}><Printer size={13}/>A4</button>
-                      <button className="px-3 py-2 border rounded-sm text-sm" onClick={()=>doPrint(editing,"80")}>80mm</button>
-                      <button className="px-3 py-2 border rounded-sm text-sm" onClick={()=>doPrint(editing,"a4")}>PDF</button>
+                      <button className="lm-btn lm-btn-dark" onClick={()=>doPrint(editing,"a4")} data-testid="sheet-print"><Printer size={13}/>Imprimir / PDF</button>
                     </>
                   )}
                   <button className="lokal-btn-primary" onClick={save} data-testid="save-order">SALVAR</button>

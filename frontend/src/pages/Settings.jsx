@@ -8,13 +8,30 @@ const COLORS = [
   { name: "Branco", value: "#FFFFFF" }, { name: "Cinza Claro", value: "#F5F5F5" }, { name: "Bege", value: "#F5F0E6" },
   { name: "Azul Claro", value: "#E6F0FF" }, { name: "Verde Claro", value: "#E6FFE6" }, { name: "Escuro", value: "#1E1E1E" },
 ];
+const PANEL_COLORS = [
+  { name: "Creme", value: "#FBF9F4" }, { name: "Branco", value: "#FFFFFF" }, { name: "Bege", value: "#F5F0E6" },
+  { name: "Caqui Claro", value: "#EDE4D0" }, { name: "Oliva Claro", value: "#E9ECDC" }, { name: "Cinza Claro", value: "#F0F0F0" },
+  { name: "Escuro", value: "#1E1E1E" },
+];
+
+const Swatches = ({ colors, current, onPick, prefix }) => (
+  <div className="flex flex-wrap gap-3">
+    {colors.map((c) => (
+      <button key={c.value} onClick={() => onPick(c.value)} data-testid={`${prefix}-${c.name}`}
+        className={`flex flex-col items-center gap-1 p-2 border rounded ${current === c.value ? "border-[#B8860B] ring-2 ring-[#B8860B]" : ""}`}>
+        <span className="w-12 h-12 border rounded" style={{ background: c.value }} />
+        <span className="text-[11px] font-head">{c.name}</span>
+      </button>
+    ))}
+  </div>
+);
 const STORE_FIELDS = [
   ["store_full_name", "Razão social"], ["cnpj", "CNPJ"], ["address", "Endereço"], ["phone", "Telefone"],
   ["instagram", "Instagram"], ["pix_key", "Chave PIX"], ["print_footer_text", "Rodapé da impressão"],
 ];
 
 export default function Settings() {
-  const { user, bg, applyBg } = useAuth();
+  const { user, bg, applyBg, panel, applyPanel } = useAuth();
   const [s, setS] = useState(null);
   const [users, setUsers] = useState([]);
   const [nu, setNu] = useState({ name: "", email: "", password: "", role: "vendedor" });
@@ -23,6 +40,7 @@ export default function Settings() {
   useEffect(() => { api.get("/settings").then((r) => setS(r.data)); loadUsers(); }, []);
 
   const pickColor = async (c) => { applyBg(c); await api.put("/settings", { background_color: c }); toast.success("Fundo atualizado"); };
+  const pickPanel = async (c) => { applyPanel(c); await api.put("/settings", { panel_color: c }); toast.success("Cor das janelas atualizada"); };
   const saveStore = async () => { await api.put("/settings", s); toast.success("Dados salvos"); };
   const addUser = async () => {
     try { await api.post("/auth/users", nu); toast.success("Usuário criado"); setNu({ name: "", email: "", password: "", role: "vendedor" }); loadUsers(); }
@@ -39,15 +57,13 @@ export default function Settings() {
 
       <section className="lokal-panel p-4">
         <h2 className="lokal-stencil text-sm mb-3">Cor de fundo do sistema</h2>
-        <div className="flex flex-wrap gap-3">
-          {COLORS.map((c) => (
-            <button key={c.value} onClick={() => pickColor(c.value)} data-testid={`bg-color-${c.name}`}
-              className={`flex flex-col items-center gap-1 p-2 border ${bg === c.value ? "border-[#B8860B] ring-2 ring-[#B8860B]" : ""}`}>
-              <span className="w-12 h-12 border" style={{ background: c.value }} />
-              <span className="text-[11px] font-mono">{c.name}</span>
-            </button>
-          ))}
-        </div>
+        <Swatches colors={COLORS} current={bg} onPick={pickColor} prefix="bg-color" />
+      </section>
+
+      <section className="lokal-panel p-4">
+        <h2 className="lokal-stencil text-sm mb-1">Cor das janelas flutuantes</h2>
+        <p className="text-xs text-neutral-500 mb-3">Aplica-se aos formulários laterais, janelas de entrada/saída, desmontagem e pré-visualização.</p>
+        <Swatches colors={PANEL_COLORS} current={panel} onPick={pickPanel} prefix="panel-color" />
       </section>
 
       <section className="lokal-panel p-4">

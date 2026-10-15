@@ -122,11 +122,6 @@ class ProductSize(BaseModel):
     stock: float = 0
     stock_min: float = 0
 
-class KitItem(BaseModel):
-    product_id: str
-    size: Optional[str] = None
-    qty: float = 1
-
 class Product(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
@@ -141,8 +136,7 @@ class Product(BaseModel):
     shelf: Optional[str] = None
     photo: Optional[str] = None  # base64 or url
     sizes: List[ProductSize] = []
-    is_kit: bool = False
-    kit_items: List[KitItem] = []
+    linked_ids: List[str] = []  # produtos em que este se desmonta (ex: FARDA -> CALÇA + GANDOLA)
     created_at: str = Field(default_factory=now_iso)
 
 class Customer(BaseModel):
@@ -259,6 +253,14 @@ class Settings(BaseModel):
     print_header_html: str = ""
     print_footer_text: str = "Obrigado pela preferência! - Lokal Militar"
 
+ACTIVE_STATUSES = ("Aprovado", "Separado", "Entregue")
+
+class Vendor(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    name: str
+    created_at: str = Field(default_factory=now_iso)
+
 # ---------- Simple generic CRUD factory ----------
 def make_crud(coll_name: str, Model):
     router = APIRouter(prefix=f"/{coll_name}")
@@ -358,6 +360,7 @@ api.include_router(make_crud("size_grids", SizeGrid))
 api.include_router(make_crud("suppliers", Supplier))
 api.include_router(make_crud("customers", Customer))
 api.include_router(make_crud("expenses", Expense))
+api.include_router(make_crud("vendors", Vendor))
 
 # ---------- Products (custom to validate kit) ----------
 @api.get("/products")
@@ -408,46 +411,41 @@ async def _stock_of(product_id: str, size: Optional[str]) -> float:
             return float(s.get("stock", 0))
     return 0
 
-async def _find_product_by_name_contains(terms: List[str], size: str):
-    """Find a product whose name matches ALL terms (case-insensitive) with given size in stock>0."""
-    docs = await db.products.find({}, {"_id": 0}).to_list(5000)
-    for d in docs:
-        name_u = (d.get("name") or "").upper()
-        if all(t in name_u for t in terms):
-            for s in d.get("sizes", []):
-                if s.get("size") == size and float(s.get("stock", 0)) > 0:
-                    return d
-    return None
-
-async def _try_desmontar_farda(need_name_hint: str, size: str, order_log: List[str]) -> bool:
-    """If a CALCA or GANDOLA of given size is missing, look for a FARDA of same size and disassemble."""
-    farda = await _find_product_by_name_contains(["FARDA"], size)
-    if not farda:
-        return False
-    # subtract 1 FARDA size
-    await _change_stock(farda["id"], size, -1)
+async def _log_mov(prod: dict, size, qty, kind, reason, order_id=None):
     await db.stock_movements.insert_one({
-        "id": new_id(), "product_id": farda["id"], "product_name": farda["name"],
-        "sku": farda.get("sku"), "size": size, "qty": 1,
-        "kind": "DESMONTAGEM", "reason": f"Desmontagem automática para atender pedido ({need_name_hint})",
-        "created_at": now_iso()
+        "id": new_id(), "product_id": prod["id"], "product_name": prod.get("name"),
+        "sku": prod.get("sku"), "size": size, "qty": qty, "kind": kind,
+        "reason": reason, "order_id": order_id, "created_at": now_iso()
     })
-    order_log.append(f"FARDA-{size} desmontada para atender o pedido")
-    # add 1 CALCA and 1 GANDOLA of same size
-    calca = None
-    gandola = None
-    docs = await db.products.find({}, {"_id": 0}).to_list(5000)
-    for d in docs:
-        n = (d.get("name") or "").upper()
-        if "CALCA" in n or "CALÇA" in n:
-            calca = calca or d
-        if "GANDOLA" in n:
-            gandola = gandola or d
-    if calca:
-        await _change_stock(calca["id"], size, 1)
-    if gandola:
-        await _change_stock(gandola["id"], size, 1)
-    return True
+
+async def _desmontar(parent: dict, size, reason: str, order_id=None) -> List[str]:
+    """Remove 1 parent unit of `size` and add 1 of each linked product of the same size."""
+    await _change_stock(parent["id"], size, -1)
+    await _log_mov(parent, size, 1, "DESMONTAGEM_SAIDA", reason, order_id)
+    names = []
+    for cid in parent.get("linked_ids", []):
+        child = await db.products.find_one({"id": cid}, {"_id": 0})
+        if not child:
+            continue
+        await _change_stock(cid, size, 1)
+        await _log_mov(child, size, 1, "DESMONTAGEM_ENTRADA", f"Desmontagem de {parent.get('name')} {size}", order_id)
+        names.append(child.get("name"))
+    return names
+
+async def _cover_shortage(prod: dict, size, qty: float, order: dict, log: List[str]):
+    """If stock is insufficient, disassemble linked parent products of the same size."""
+    missing = qty - max(await _stock_of(prod["id"], size), 0)
+    if missing <= 0:
+        return
+    parents = await db.products.find({"linked_ids": prod["id"]}, {"_id": 0}).to_list(100)
+    for parent in parents:
+        while missing > 0 and await _stock_of(parent["id"], size) > 0:
+            names = await _desmontar(parent, size, f"Desmontagem automática p/ pedido #{order.get('number')}", order["id"])
+            log.append(f"{parent.get('name')} {size} desmontada → +1 {' / +1 '.join(names)}")
+            missing -= 1
+        if missing <= 0:
+            break
+
 
 # ---------- Stock movements ----------
 @api.get("/stock_movements")
@@ -472,34 +470,17 @@ async def del_stock(mid: str, user: dict = Depends(get_current_user)):
     await db.stock_movements.delete_one({"id": mid})
     return {"deleted": 1}
 
-@api.post("/products/{pid}/desmontar_kit")
-async def desmontar_kit(pid: str, payload: dict, user: dict = Depends(get_current_user)):
-    """Pega 1 unidade do kit (pelo size) e devolve ao estoque os itens individuais."""
+@api.post("/products/{pid}/desmontar")
+async def desmontar_manual(pid: str, payload: dict, user: dict = Depends(get_current_user)):
     size = payload.get("size")
-    p = await db.products.find_one({"id": pid})
-    if not p or not p.get("is_kit"):
-        raise HTTPException(400, "Produto não é um kit")
-    stock = await _stock_of(pid, size)
-    if stock <= 0:
-        raise HTTPException(400, "Sem estoque do kit")
-    await _change_stock(pid, size, -1)
-    for item in p.get("kit_items", []):
-        await _change_stock(item["product_id"], item.get("size") or size, item.get("qty", 1))
-        child = await db.products.find_one({"id": item["product_id"]})
-        await db.stock_movements.insert_one({
-            "id": new_id(), "product_id": item["product_id"],
-            "product_name": (child or {}).get("name", ""),
-            "sku": (child or {}).get("sku"),
-            "size": item.get("size") or size, "qty": item.get("qty", 1),
-            "kind": "DESMONTAGEM", "reason": f"Desmontagem manual do kit {p.get('name')}",
-            "created_at": now_iso()
-        })
-    await db.stock_movements.insert_one({
-        "id": new_id(), "product_id": pid, "product_name": p.get("name", ""),
-        "sku": p.get("sku"), "size": size, "qty": 1,
-        "kind": "DESMONTAGEM", "reason": "Kit desmontado",
-        "created_at": now_iso()
-    })
+    qty = int(payload.get("qty") or 1)
+    p = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not p or not p.get("linked_ids"):
+        raise HTTPException(400, "Produto sem vínculos de desmontagem")
+    if await _stock_of(pid, size) < qty:
+        raise HTTPException(400, f"Estoque insuficiente de {p.get('name')} tamanho {size}")
+    for _ in range(qty):
+        await _desmontar(p, size, "Desmontagem manual")
     return {"ok": True}
 
 # ---------- Orders ----------
@@ -521,44 +502,12 @@ async def _apply_order_stock(order: dict):
         pid = it["product_id"]
         size = it.get("size")
         qty = float(it.get("qty", 1))
-        prod = await db.products.find_one({"id": pid})
+        prod = await db.products.find_one({"id": pid}, {"_id": 0})
         if not prod:
             continue
-        # If product is kit, disassemble into items
-        if prod.get("is_kit"):
-            for kit_it in prod.get("kit_items", []):
-                csize = kit_it.get("size") or size
-                cqty = float(kit_it.get("qty", 1)) * qty
-                child = await db.products.find_one({"id": kit_it["product_id"]})
-                if not child:
-                    continue
-                cur = await _stock_of(child["id"], csize)
-                if cur < cqty:
-                    # try FARDA desmontagem for CALCA/GANDOLA
-                    name_u = (child.get("name") or "").upper()
-                    if "CALCA" in name_u or "CALÇA" in name_u or "GANDOLA" in name_u:
-                        await _try_desmontar_farda(child.get("name"), csize, log)
-                await _change_stock(child["id"], csize, -cqty)
-                await db.stock_movements.insert_one({
-                    "id": new_id(), "product_id": child["id"],
-                    "product_name": child.get("name"), "sku": child.get("sku"),
-                    "size": csize, "qty": cqty, "kind": "SAIDA",
-                    "reason": f"Venda kit pedido #{order.get('number')}",
-                    "order_id": order["id"], "created_at": now_iso()
-                })
-        else:
-            cur = await _stock_of(pid, size)
-            if cur < qty:
-                name_u = (prod.get("name") or "").upper()
-                if "CALCA" in name_u or "CALÇA" in name_u or "GANDOLA" in name_u:
-                    await _try_desmontar_farda(prod.get("name"), size, log)
-            await _change_stock(pid, size, -qty)
-            await db.stock_movements.insert_one({
-                "id": new_id(), "product_id": pid, "product_name": prod.get("name"),
-                "sku": prod.get("sku"), "size": size, "qty": qty, "kind": "SAIDA",
-                "reason": f"Venda pedido #{order.get('number')}",
-                "order_id": order["id"], "created_at": now_iso()
-            })
+        await _cover_shortage(prod, size, qty, order, log)
+        await _change_stock(pid, size, -qty)
+        await _log_mov(prod, size, qty, "SAIDA", f"{order.get('type')} pedido #{order.get('number')}", order["id"])
     # Devoluções: adicionar ao estoque
     for ri in order.get("returned_items", []):
         pid = ri["product_id"]
@@ -597,7 +546,7 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
     doc = obj.model_dump()
     await db.orders.insert_one(doc)
     # Stock & commission on APROVADO/ENTREGUE
-    if doc["status"] in ("Aprovado", "Entregue") and doc["type"] in ("VENDA",):
+    if doc["status"] in ACTIVE_STATUSES and doc["type"] in ("VENDA",):
         await _apply_order_stock(doc)
         await _record_commission(doc)
     if doc["type"] in ("TROCA", "DEVOLUCAO"):
@@ -621,8 +570,8 @@ async def update_order(oid: str, payload: dict, user: dict = Depends(get_current
     await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     # Status transition to Aprovado/Entregue → trigger stock + commission once
-    was_active = old.get("status") in ("Aprovado", "Entregue")
-    now_active = doc.get("status") in ("Aprovado", "Entregue")
+    was_active = old.get("status") in ACTIVE_STATUSES
+    now_active = doc.get("status") in ACTIVE_STATUSES
     if (not was_active) and now_active and doc.get("type") == "VENDA":
         await _apply_order_stock(doc)
         await _record_commission(doc)
@@ -717,20 +666,28 @@ async def dashboard(user: dict = Depends(get_current_user)):
     com_month = sum(c.get("amount", 0) for c in coms if (c.get("created_at", "") or "").startswith(cur_month))
     # expenses month
     exps = await db.expenses.find({}, {"_id": 0}).to_list(5000)
-    exp_month = sum(e.get("amount", 0) + e.get("fuel_cost", 0) + e.get("toll_cost", 0)
-                    for e in exps if (e.get("date", "") or "").startswith(cur_month))
+    month_exps = [e for e in exps if (e.get("date", "") or "").startswith(cur_month)]
+    exp_month = sum(e.get("amount", 0) + e.get("fuel_cost", 0) + e.get("toll_cost", 0) for e in month_exps)
+    insumos_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "INSUMO")
+    manut_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "MANUTENCAO")
+    soon = (datetime.now(timezone.utc) + timedelta(days=15)).strftime("%Y-%m-%d")
+    manut_alerts = sum(1 for e in exps if e.get("type") == "MANUTENCAO" and e.get("next_review_date") and e["next_review_date"][:10] <= soon)
     # sales chart last 7 days
     chart = []
     for i in range(6, -1, -1):
         day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
         total_day = sum(o.get("total", 0) for o in orders
                         if (o.get("created_at", "") or "").startswith(day)
-                        and o.get("status") in ("Aprovado", "Entregue")
+                        and o.get("status") in ACTIVE_STATUSES
                         and o.get("type") == "VENDA")
         chart.append({"date": day, "value": total_day})
     return {
         "totals_by_cat": totals_by_cat,
         "orders_today": len(orders_today),
+        "orders_today_total": sum(o.get("total", 0) for o in orders_today),
+        "insumos_month": insumos_month,
+        "manut_month": manut_month,
+        "manut_alerts": manut_alerts,
         "pending": len(pending),
         "customers": customers,
         "commission_month": com_month,

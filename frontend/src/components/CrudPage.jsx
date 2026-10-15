@@ -34,20 +34,20 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
 
   return (
     <div data-testid={testid}>
-      <header className="flex items-center justify-between flex-wrap gap-2 mb-4">
+      <header className="lm-page-head flex items-end justify-between flex-wrap gap-2">
         <div>
-          <h1 className="lokal-stencil text-2xl">{title}</h1>
-          {subtitle && <p className="font-mono text-xs text-neutral-500">{subtitle}</p>}
+          <h1>{title}</h1>
+          {subtitle && <p>{subtitle}</p>}
         </div>
-        <button className="lokal-btn-primary flex items-center gap-1" onClick={() => setEditing({ ...defaults })} data-testid={`${testid}-new`}>
-          <Plus size={14} /> NOVO
+        <button className="lm-btn lm-btn-olive" onClick={() => setEditing({ ...defaults })} data-testid={`${testid}-new`}>
+          <Plus size={14} /> Novo
         </button>
       </header>
       <input placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)}
-        className="w-full md:w-80 border px-3 py-2 rounded-sm mb-3 text-sm" data-testid={`${testid}-search`} />
-      <div className="lokal-panel overflow-x-auto">
-        <table className="w-full text-sm table-mono">
-          <thead className="bg-neutral-100 text-[11px] text-neutral-600">
+        className="lm-input md:!w-80 mb-3" data-testid={`${testid}-search`} />
+      <div className="lm-table-wrap overflow-x-auto">
+        <table className="lm-table">
+          <thead>
             <tr>{columns.map((c) => <th key={c.label} className="text-left p-2">{c.label}</th>)}<th className="p-2">AÇÕES</th></tr>
           </thead>
           <tbody>
@@ -67,7 +67,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
       {footer && footer(shown)}
 
       <Sheet open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <SheetContent className="w-full md:max-w-2xl overflow-y-auto">
+        <SheetContent className="w-full md:max-w-2xl overflow-y-auto" style={{ background: "#FBF9F4" }}>
           <SheetHeader><SheetTitle className="lokal-stencil">{editing?.id ? "Editar" : "Novo"} · {title}</SheetTitle></SheetHeader>
           {editing && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">

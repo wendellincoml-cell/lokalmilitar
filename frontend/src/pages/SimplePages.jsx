@@ -26,18 +26,22 @@ export function Customers() {
 }
 
 export function Categories() {
+  const [cats, setCats] = useState([]);
+  useEffect(() => { api.get("/categories").then((r) => setCats(r.data)); }, []);
+  const parentName = (id) => cats.find((c) => c.id === id)?.name || "";
   return (
-    <CrudPage title="Categorias" subtitle="Categorias dinâmicas com cor, ícone e grade" endpoint="categories" testid="categories"
+    <CrudPage title="Categorias" subtitle="Categorias e subcategorias com cor, ícone e grade" endpoint="categories" testid="categories"
       defaults={{ color: "#4B5320", icon: "Package" }}
       fields={[
         { key: "name", label: "Nome", required: true },
+        { key: "parent_id", label: "Subcategoria de", type: "select", options: cats.filter((c) => !c.parent_id).map((c) => ({ value: c.id, label: c.name })) },
         { key: "color", label: "Cor", type: "color" },
         { key: "icon", label: "Ícone", type: "select", options: ["Package", "Shirt", "Footprints", "Award", "Star", "Shield"] },
         { key: "size_grid", label: "Grade de tamanhos", type: "select", options: ["ROUPA", "CALCADOS"] },
       ]}
       columns={[
         { label: "COR", render: (r) => <span className="inline-block w-4 h-4 border" style={{ background: r.color }} /> },
-        { key: "name", label: "NOME" }, { key: "icon", label: "ÍCONE" }, { key: "size_grid", label: "GRADE" },
+        { key: "name", label: "NOME" }, { label: "SUBCATEGORIA DE", render: (r) => parentName(r.parent_id) }, { key: "icon", label: "ÍCONE" }, { key: "size_grid", label: "GRADE" },
       ]} />
   );
 }

@@ -1,70 +1,135 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
+import { FileSpreadsheet, Printer, CircleCheck, UserPlus, Trash2 } from "lucide-react";
+
+const PERIODS = [["hoje", "Hoje"], ["semana", "Semana"], ["mes", "Mês"], ["todos", "Todos"]];
+const PERIOD_LABEL = { hoje: "Hoje", semana: "Semana", mes: "Mês", todos: "Todos" };
+
+const inPeriod = (iso, period) => {
+  if (period === "todos") return true;
+  const d = new Date(iso); const now = new Date();
+  if (period === "hoje") return d.toDateString() === now.toDateString();
+  if (period === "semana") return now - d <= 7 * 86400000;
+  return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+};
+
+function VendorsPanel({ vendors, reload }) {
+  const [name, setName] = useState("");
+  const add = async () => {
+    if (!name.trim()) return;
+    await api.post("/vendors", { name: name.trim().toUpperCase() }); setName(""); reload(); toast.success("Vendedor adicionado");
+  };
+  const del = async (id) => { if (!window.confirm("Remover vendedor?")) return; await api.delete(`/vendors/${id}`); reload(); };
+  return (
+    <div className="lm-card p-4" data-testid="vendors-panel">
+      <h2 className="font-head text-lg font-semibold mb-2">Vendedores</h2>
+      <div className="flex gap-2 mb-2">
+        <input className="lm-input" placeholder="Nome do vendedor" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} data-testid="vendor-name" />
+        <button className="lm-btn lm-btn-olive" onClick={add} data-testid="vendor-add"><UserPlus size={16} /></button>
+      </div>
+      {vendors.map((v) => (
+        <div key={v.id} className="flex items-center justify-between bg-[#E8E2D5] rounded px-3 py-2 mb-1 font-head text-sm">
+          {v.name}<button onClick={() => del(v.id)} data-testid={`vendor-del-${v.id}`}><Trash2 size={14} /></button>
+        </div>
+      ))}
+      {vendors.length === 0 && <div className="text-xs text-neutral-500">Nenhum vendedor cadastrado.</div>}
+    </div>
+  );
+}
 
 export default function Commissions() {
   const [rows, setRows] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [vendor, setVendor] = useState("ALL");
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [period, setPeriod] = useState("mes");
+  const [paidF, setPaidF] = useState("all");
 
-  const load = () => api.get("/commissions").then((r) => setRows(r.data));
+  const load = async () => {
+    const [c, o, v] = await Promise.all([api.get("/commissions"), api.get("/orders"), api.get("/vendors")]);
+    setRows(c.data); setOrders(o.data); setVendors(v.data);
+  };
   useEffect(() => { load(); }, []);
 
-  const vendors = useMemo(() => [...new Set(rows.map((r) => r.vendor_name).filter(Boolean))], [rows]);
-  const shown = rows.filter((r) => (vendor === "ALL" || r.vendor_name === vendor) && (!month || (r.created_at || "").startsWith(month)));
+  const orderById = useMemo(() => Object.fromEntries(orders.map((o) => [o.id, o])), [orders]);
+  const shown = rows.filter((r) => (vendor === "ALL" || r.vendor_name === vendor) && inPeriod(r.created_at, period)
+    && (paidF === "all" || (paidF === "paid" ? r.paid : !r.paid)));
   const pending = shown.filter((r) => !r.paid);
+  const total = shown.reduce((s, r) => s + r.amount, 0);
+  const items = shown.reduce((s, r) => s + r.items_count, 0);
 
   const pay = async () => {
-    if (!pending.length) return;
     await api.post("/commissions/mark_paid", { ids: pending.map((r) => r.id) });
     toast.success("Comissões marcadas como pagas"); load();
+  };
+  const tableRows = shown.map((r) => [r.order_number, formatDateShort(r.created_at), r.vendor_name || "", orderById[r.order_id]?.customer_name || "", orderById[r.order_id]?.status || "", r.items_count, r.amount, r.paid ? "PAGA" : "PENDENTE"]);
+  const exportExcel = () => {
+    const csv = [["Pedido", "Data", "Vendedor", "Cliente", "Status", "Itens", "Comissão", "Situação"], ...tableRows]
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv" })); a.download = "comissoes.csv"; a.click();
+  };
+  const printReport = () => {
+    const w = window.open("", "_blank");
+    w.document.write(`<html><head><title>Comissões</title><style>body{font-family:Arial;padding:20px}h1{color:#4B5320;font-size:18px}table{width:100%;border-collapse:collapse}th{background:#111;color:#D9C9A0}th,td{border:1px solid #444;padding:4px;font-size:11px;text-align:left}</style></head><body>
+      <h1>LOKAL MILITAR — Relatório de Comissões</h1><div style="font-size:12px">Vendedor: ${vendor === "ALL" ? "Todos" : vendor} · Período: ${PERIOD_LABEL[period]}</div>
+      <table><thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Status</th><th>Itens</th><th>Comissão</th><th>Situação</th></tr></thead>
+      <tbody>${tableRows.map((r) => `<tr>${r.map((v, i) => `<td>${i === 6 ? formatBRL(v) : v}</td>`).join("")}</tr>`).join("")}</tbody></table>
+      <h3 style="text-align:right">Itens: ${items} · Total: ${formatBRL(total)} · Pendente: ${formatBRL(pending.reduce((s, r) => s + r.amount, 0))}</h3>
+      <script>window.onload=()=>window.print()</script></body></html>`);
+    w.document.close();
   };
 
   return (
     <div data-testid="commissions-page">
-      <header className="flex items-center justify-between flex-wrap gap-2 mb-4">
-        <div>
-          <h1 className="lokal-stencil text-2xl">Comissões</h1>
-          <p className="font-mono text-xs text-neutral-500">R$ 1,00 por item vendido (pedidos Aprovados/Entregues)</p>
-        </div>
+      <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
+        <div><h1>Comissões</h1><p>R$ 1,00 por produto vendido (pedidos Aprovado, Separado ou Entregue)</p></div>
         <div className="flex gap-2 flex-wrap">
-          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="border px-2 py-1.5 text-sm rounded-sm" data-testid="com-month" />
-          <select value={vendor} onChange={(e) => setVendor(e.target.value)} className="border px-2 py-1.5 text-sm rounded-sm" data-testid="com-vendor">
-            <option value="ALL">Todos vendedores</option>
-            {vendors.map((v) => <option key={v}>{v}</option>)}
-          </select>
-          <button className="lokal-btn-primary" onClick={pay} data-testid="com-pay">MARCAR PAGAS ({pending.length})</button>
+          <button className="lm-btn lm-btn-outline" onClick={exportExcel} data-testid="com-excel"><FileSpreadsheet size={15} />Excel</button>
+          <button className="lm-btn lm-btn-dark" onClick={printReport} data-testid="com-print"><Printer size={15} />Imprimir relatório de comissão</button>
+          <button className="lm-btn lm-btn-gold" disabled={!pending.length} onClick={pay} data-testid="com-pay"><CircleCheck size={15} />Marcar como pago</button>
         </div>
-      </header>
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        <Box label="Itens" value={shown.reduce((s, r) => s + r.items_count, 0)} />
-        <Box label="Total" value={formatBRL(shown.reduce((s, r) => s + r.amount, 0))} />
-        <Box label="A pagar" value={formatBRL(pending.reduce((s, r) => s + r.amount, 0))} />
       </div>
-      <div className="lokal-panel overflow-x-auto">
-        <table className="w-full text-sm table-mono">
-          <thead className="bg-neutral-100 text-[11px]"><tr>
-            <th className="p-2 text-left">DATA</th><th className="text-left">PEDIDO</th><th className="text-left">VENDEDOR</th><th>ITENS</th><th>VALOR</th><th>STATUS</th>
-          </tr></thead>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <div className="lm-hero p-6 lg:col-span-2" data-testid="com-hero">
+          <div className="font-head text-xs tracking-[0.2em] text-[#C3B091]">Comissão — {vendor === "ALL" ? "todos os vendedores" : vendor} — {PERIOD_LABEL[period]}</div>
+          <div className="font-stencil text-6xl md:text-7xl text-[#B8860B] my-2" data-testid="com-total">{formatBRL(total)}</div>
+          <div className="flex flex-wrap gap-6 text-sm">
+            <span><b className="text-white">{items}</b> produtos vendidos</span>
+            <span><b className="text-white">{shown.length}</b> pedidos</span>
+            <span>Pendente: <b className="text-white">{formatBRL(pending.reduce((s, r) => s + r.amount, 0))}</b></span>
+          </div>
+        </div>
+        <VendorsPanel vendors={vendors} reload={load} />
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3">
+        <select className="lm-input !w-52" value={vendor} onChange={(e) => setVendor(e.target.value)} data-testid="com-vendor">
+          <option value="ALL">Todos vendedores</option>{vendors.map((v) => <option key={v.id} value={v.name}>{v.name}</option>)}
+        </select>
+        <div className="lm-seg">{PERIODS.map(([k, l]) => <button key={k} className={period === k ? "on" : ""} onClick={() => setPeriod(k)} data-testid={`com-period-${k}`}>{l}</button>)}</div>
+        <select className="lm-input !w-52" value={paidF} onChange={(e) => setPaidF(e.target.value)} data-testid="com-paid-filter">
+          <option value="all">Pagas e pendentes</option><option value="pending">Só pendentes</option><option value="paid">Só pagas</option>
+        </select>
+      </div>
+
+      <div className="lm-table-wrap overflow-x-auto">
+        <table className="lm-table">
+          <thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Status</th><th>Itens</th><th>Comissão</th><th>Situação</th></tr></thead>
           <tbody>
             {shown.map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-2">{formatDateShort(r.created_at)}</td><td>#{r.order_number}</td><td>{r.vendor_name}</td>
-                <td className="text-center">{r.items_count}</td><td className="text-center">{formatBRL(r.amount)}</td>
-                <td className="text-center"><span className={`text-[10px] px-2 py-0.5 ${r.paid ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>{r.paid ? "PAGA" : "PENDENTE"}</span></td>
+              <tr key={r.id}>
+                <td className="font-head font-bold">#{r.order_number}</td><td>{formatDateShort(r.created_at)}</td><td>{r.vendor_name}</td>
+                <td>{orderById[r.order_id]?.customer_name}</td><td>{orderById[r.order_id]?.status}</td><td>{r.items_count}</td>
+                <td className="font-semibold">{formatBRL(r.amount)}</td>
+                <td><span className={`badge ${r.paid ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>{r.paid ? "Paga" : "Pendente"}</span></td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-xs text-neutral-500">Sem comissões no período.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={8} className="text-center text-neutral-600 py-10">Nenhum pedido gerou comissão neste período.</td></tr>}
           </tbody>
         </table>
       </div>
     </div>
   );
 }
-
-const Box = ({ label, value }) => (
-  <div className="lokal-tile p-3" data-testid={`com-box-${label}`}>
-    <div className="font-mono text-[11px] text-neutral-500">{label}</div>
-    <div className="font-mono text-xl font-bold">{value}</div>
-  </div>
-);
