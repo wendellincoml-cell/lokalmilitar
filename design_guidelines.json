@@ -1,0 +1,124 @@
+{
+  "theme": "hybrid_fullstack",
+  "app_name": "LOKAL MILITAR - Fardas e Artigos Militares",
+  "typography": {
+    "headings": "Chivo",
+    "body": "IBM Plex Sans",
+    "data_mono": "IBM Plex Mono",
+    "rules": "Headings must be robust and authoritative (Chivo, tracking-tight, uppercase for sections). Data tables, SKUs, Order Numbers, and prices MUST use IBM Plex Mono for tactical precision. Do NOT use Inter for headings."
+  },
+  "colors": {
+    "brand_primary": "#4B5320",
+    "brand_secondary": "#C3B091",
+    "brand_accent": "#B8860B",
+    "brand_dark": "#111111",
+    "dynamic_backgrounds": [
+      { "name": "Branco", "value": "#FFFFFF" },
+      { "name": "Cinza Claro", "value": "#F5F5F5" },
+      { "name": "Bege", "value": "#F5F0E6" },
+      { "name": "Azul Claro", "value": "#E6F0FF" },
+      { "name": "Verde Claro", "value": "#E6FFE6" },
+      { "name": "Escuro", "value": "#1E1E1E" }
+    ],
+    "rules": "Tactical Military palette. Use Olive Green (#4B5320) for primary actions, Khaki (#C3B091) for secondary borders/surfaces, Gold (#B8860B) strictly for highlights, alerts, or ranks. STRICTLY NO purple gradients. Dark elements should map to #111111. Ensure contrast is high."
+  },
+  "visual_enhancers": {
+    "surfaces": "Tactical Minimalism. Heavy use of 1px solid borders (border-collapse on tables, border-border/40). Avoid soft, bubbly shadows. Use crisp geometric containers. Modals and cards should feel like rugged command-center panels.",
+    "border_radius": "Strictly limited to rounded-none or rounded-sm (max 4px) to preserve the 'indestructible' military hardware feel.",
+    "effects": "Use subtle grid line backgrounds or crosshair accents in empty states."
+  },
+  "grids_and_layouts": {
+    "dashboard": "High-Density Grid. 4 KPI cards (Fardamento, Calçados, Acessórios, Insígnias) that are clickable with sharp hover interactions. Filterable chart spans multiple columns. Tight gaps (gap-4).",
+    "sidebar": "Strong military-themed collapsible sidebar. Deep black or olive dark background. High-contrast icons. Active states highlight with Olive Green or Gold.",
+    "tables": "Dense data tables. Use monospace for numeric/SKU columns. Clear visual hierarchy with sticky headers and inline actions."
+  },
+  "motion": {
+    "interactions": "Fast, crisp micro-interactions. Hover states should feel like tactical target locks (e.g., sharp 1px border highlights, subtle background shifts). No slow or bouncy animations.",
+    "modals": "Use Shadcn Sheet component (slide-in from right) for large forms. Make them wide (w-3/4 or w-full on mobile)."
+  },
+  "accessibility": {
+    "contrast": "Ensure text over Olive Green meets APCA/WCAG standards (typically requires white text).",
+    "focus": "Focus rings should be sharp 2px solid Gold (#B8860B) or Olive Green (#4B5320)."
+  },
+  "image_urls": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1569242840510-9fe6f0112cee?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwyfHx0YWN0aWNhbCUyMG1pbGl0YXJ5JTIwZ2VhciUyMHVuaWZvcm18ZW58MHx8fHwxNzkyMTAxOTA1fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Tactical gear/soldiers in camouflage. Use with heavy dark or olive overlay (bg-black/70) so the login form is readable."
+    },
+    "product_placeholder": {
+      "url": "https://images.unsplash.com/photo-1579912437766-7896df6d3cd3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwxfHx0YWN0aWNhbCUyMG1pbGl0YXJ5JTIwZ2VhciUyMHVuaWZvcm18ZW58MHx8fHwxNzkyMTAxOTA1fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Placeholder for military products/fardas."
+    }
+  },
+  "instructions_to_main_agent": {
+    "global_logic": "Build a robust React + Tailwind ERP system with a military theme. Implement a React Context or similar global state for the background theme so the Color Picker in Configurações instantly applies one of the 6 background colors to the app.",
+    "modules": [
+      {
+        "name": "Auth",
+        "details": "Multi-user login (admin + vendedores)."
+      },
+      {
+        "name": "Dashboard",
+        "details": "Name exactly 'Dashboard'. Display 4 clickable metric cards (Fardamento, Calçados, Acessórios, Insígnias) and a filterable sales chart."
+      },
+      {
+        "name": "Produtos",
+        "details": "List and creation form with military size grid (P/M/G/GG/XGG + 38-46), SKU, Categoria, and Photo upload. Use large Sheet component for editing."
+      },
+      {
+        "name": "Estoque",
+        "details": "Track Entrada/Saída with a detailed history log. Use dense table layout."
+      },
+      {
+        "name": "Pedidos",
+        "details": "Order management. MUST feature 3 distinct print/export buttons: A4 Fiscal, Thermal 80mm, Save PDF. Create dedicated printable components."
+      },
+      {
+        "name": "Print_A4_Layout",
+        "details": "Strict fiscal layout matching reference. Top-left: LOKAL MILITAR logo. Top-right: CNPJ/Address. Center: Pedido # (large). Table: QTD, Produto, Tamanho, VL Unit, Subtotal. Bottom-right: Totals. Bottom: Observations, Client info (Patente/OM), and Signature line."
+      },
+      {
+        "name": "Trocas e Devoluções",
+        "details": "Module for returns, allowing entries even without an original order number (avulsa)."
+      },
+      {
+        "name": "Clientes",
+        "details": "Military client fields: Nome/Loja, Patente/OM, CPF, Telefone, Endereço."
+      },
+      {
+        "name": "Comissões",
+        "details": "Name exactly 'Comissões'. Track and calculate R$1/item sold per vendedor."
+      },
+      {
+        "name": "Gastos",
+        "details": "Divided into distinct sub-modules or tabs: 'Insumos', 'Viagens' (tracking Combustível, Pedágios), 'Manutenção Veículo'."
+      },
+      {
+        "name": "Categorias",
+        "details": "Dynamic CRUD for categories. Allow assigning colors or icons."
+      },
+      {
+        "name": "Kits/Conjuntos",
+        "details": "Special logic requirement: If a kit 'FARDA' is added to an order, it must automatically disassemble (desmontagem automática) into 'CALÇA' + 'GANDOLA' of the exact same size in the order items."
+      },
+      {
+        "name": "Configurações",
+        "details": "Settings page. Must include a Color Picker with the 6 specific colors requested to change the app's global background."
+      }
+    ]
+  },
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic outputs. Avoid this. Make the frontend distinctly military and tactical.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Create depth through layered design elements with z-index hierarchy, but keep shapes sharp (no bubbly shadows).",
+    "MUST NOT apply universal transition (transition: all). Use specific transitions.",
+    "MUST NOT center align the app container (.App { text-align: center; }).",
+    "Always use sharp or very slightly rounded modern buttons (no fully pill-shaped generic buttons for a military app).",
+    "All interactive and key informational elements MUST include a `data-testid` attribute (e.g., data-testid='login-button', data-testid='print-a4').",
+    "NEVER use AI assistant Emoji characters (🤖🧠💭💡🔮🎯) for icons.",
+    "Every interaction needs micro-animations - hover states, active states.",
+    "CRITICAL: Do NOT use fully transparent backgrounds in headers or dropdowns. Use solid backgrounds.",
+    "Prioritize using pre-existing components from src/components/ui.",
+    "Use `sonner` for toasts."
+  ]
+}
