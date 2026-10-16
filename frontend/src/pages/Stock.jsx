@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatBRL, formatDate } from "@/lib/api";
 import { toast } from "sonner";
-import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2 } from "lucide-react";
+import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const KIND_STYLE = {
@@ -30,6 +30,7 @@ export default function Stock() {
   const [products, setProducts] = useState([]);
   const [movements, setMovements] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [params] = useSearchParams();
   const [tab, setTab] = useState("posicao");
   const [q, setQ] = useState("");
@@ -39,8 +40,8 @@ export default function Stock() {
   const [form, setForm] = useState(BLANK);
 
   const load = async () => {
-    const [p, m, c] = await Promise.all([api.get("/products"), api.get("/stock_movements"), api.get("/categories")]);
-    setProducts(p.data); setMovements(m.data); setCategories(c.data);
+    const [p, m, c, o] = await Promise.all([api.get("/products"), api.get("/stock_movements"), api.get("/categories"), api.get("/orders")]);
+    setProducts(p.data); setMovements(m.data); setCategories(c.data); setOrders(o.data);
   };
   useEffect(() => { load(); }, []);
 
@@ -74,7 +75,21 @@ export default function Stock() {
     toast.success(form.kind === "ENTRADA" ? "Entrada registrada" : "Saída registrada");
     setModal(null); setForm(BLANK); load();
   };
-  const delMov = async (id) => { if (!window.confirm("Excluir registro do histórico? (não altera o estoque)")) return; await api.delete(`/stock_movements/${id}`); load(); };
+  const delMov = async (id) => {
+    if (!window.confirm("Excluir o registro e estornar sua quantidade no estoque?")) return;
+    try {
+      await api.delete(`/stock_movements/${id}`);
+      toast.success("Registro excluído e estoque atualizado");
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível excluir o registro");
+    }
+  };
+  const printOrder = (orderId) => {
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) return toast.error("Pedido relacionado não encontrado");
+    window.open(`/pedidos?printOrder=${encodeURIComponent(orderId)}`, "_blank", "noopener,noreferrer");
+  };
   const movs = movements.filter((m) => !q || (m.product_name + (m.reason || "") + (m.sku || "")).toLowerCase().includes(q.toLowerCase()));
 
   return (
@@ -131,9 +146,10 @@ export default function Stock() {
                 <tr key={m.id}>
                   <td className="text-xs whitespace-nowrap">{formatDate(m.created_at)}</td>
                   <td><span className={`badge ${KIND_STYLE[m.kind] || "bg-neutral-200"}`}>{KIND_LABEL[m.kind] || m.kind}</span></td>
-                  <td className="font-head">{m.product_name}</td><td><span className="chip">{m.size}</span></td><td>{m.qty}</td>
+                  <td className="font-head">{m.product_name}{m.order_id && <button className="ml-2 inline-flex items-center gap-1 text-xs underline" onClick={() => printOrder(m.order_id)} title="Abrir impressão A4 do pedido"><ExternalLink size={12} />Pedido #{orders.find((o) => o.id === m.order_id)?.number || ""}</button>}</td>
+                  <td><span className="chip">{m.size}</span></td><td>{m.qty}</td>
                   <td className="text-sm">{m.reason}</td><td>{m.nf}</td>
-                  <td><button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)}><Trash2 size={14} /></button></td>
+                  <td>{!m.order_id && <button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)} aria-label="Excluir movimentação e estornar estoque"><Trash2 size={14} /></button>}</td>
                 </tr>
               ))}
               {movs.length === 0 && <tr><td colSpan={8} className="text-center text-neutral-500 py-8">Sem movimentações.</td></tr>}

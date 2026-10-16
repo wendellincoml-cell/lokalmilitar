@@ -1,11 +1,10 @@
 # LOKAL MILITAR - edge cases for FARDA desmontagem with multiple CALÇA/GANDOLA models
 import uuid
 import requests
-from test_lokal_api import BASE_URL, ADMIN
+from test_lokal_api import BASE_URL
 
 def test_desmontagem_picks_matching_model():
     s = requests.Session()
-    s.headers["Authorization"] = "Bearer " + s.post(f"{BASE_URL}/api/auth/login", json=ADMIN).json()["access_token"]
     ids = []
     def mk(name, stock):
         r = s.post(f"{BASE_URL}/api/products", json={"name": name, "sku": "TEST_" + uuid.uuid4().hex[:5], "sizes": [{"size": "GG", "stock": stock}]}).json()

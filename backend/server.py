@@ -5,12 +5,14 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import uuid
+import secrets
+import hashlib
 import jwt
 import bcrypt
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -21,7 +23,7 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 
 app = FastAPI(title="LOKAL MILITAR API")
@@ -38,29 +40,40 @@ def now_iso() -> str:
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 
-def verify_pw(p: str, h: str) -> bool:
+def verify_pw(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(p.encode(), h.encode())
-    except Exception:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
         return False
 
 def create_token(user_id: str, email: str, role: str) -> str:
-    payload = {"sub": user_id, "email": email, "role": role,
-               "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+    }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
-async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+async def get_current_user(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> dict:
     if not creds:
         raise HTTPException(401, "Not authenticated")
     try:
         payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
-    except Exception:
+    except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid token")
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    user = await db.users.find_one(
+        {"id": payload["sub"]}, {"_id": 0, "password_hash": 0}
+    )
     if not user:
         raise HTTPException(401, "User not found")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and user.get("role") == "visualizador":
+        raise HTTPException(403, "Seu acesso permite apenas visualizar o sistema")
     return user
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -73,6 +86,43 @@ def strip_mongo(doc: dict) -> dict:
         doc.pop("_id", None)
     return doc
 
+async def _prepare_trip(doc: dict) -> dict:
+    destination_type = doc.get("destination_type")
+    destination_id = doc.get("destination_id")
+    if destination_type and destination_id:
+        if destination_type not in ("cliente", "fornecedor"):
+            raise HTTPException(400, "Tipo de destino inválido")
+        collection = db.customers if destination_type == "cliente" else db.suppliers
+        destination = await collection.find_one({"id": destination_id}, {"_id": 0})
+        if not destination:
+            raise HTTPException(404, "Cliente ou fornecedor não encontrado")
+        distance = max(float(destination.get("distance_km") or 0), 0)
+        doc["km"] = distance * 2
+        doc["route"] = f"Depósito → {destination.get('address') or destination['name']} → Depósito"
+        doc["description"] = doc.get("description") or f"Viagem até {destination['name']}"
+
+    vehicle_id = doc.get("vehicle_id")
+    if vehicle_id:
+        vehicle = await db.vehicles.find_one({"id": vehicle_id, "active": {"$ne": False}}, {"_id": 0})
+        if not vehicle:
+            raise HTTPException(400, "Veículo não encontrado ou inativo")
+        doc["vehicle_name"] = vehicle["name"]
+        doc["avg_consumption"] = float(doc.get("avg_consumption") or vehicle.get("avg_consumption") or 0)
+    consumption = float(doc.get("avg_consumption") or 0)
+    km = max(float(doc.get("km") or 0), 0)
+    doc["fuel_liters"] = round(km / consumption, 2) if consumption > 0 else 0
+    price = max(float(doc.get("fuel_price_per_liter") or 0), 0)
+    if price > 0:
+        doc["fuel_cost"] = round(doc["fuel_liters"] * price, 2)
+    return doc
+
+async def _change_vehicle_km(vehicle_id: Optional[str], delta: float, *, required: bool = False):
+    if not vehicle_id or not delta:
+        return
+    result = await db.vehicles.update_one({"id": vehicle_id}, {"$inc": {"current_km": delta}})
+    if required and result.matched_count == 0:
+        raise HTTPException(400, "Veículo não encontrado")
+
 # ---------- Models ----------
 class LoginIn(BaseModel):
     email: EmailStr
@@ -82,7 +132,20 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     name: str
-    role: str = "vendedor"  # admin | vendedor
+    role: str = "vendedor"  # admin | vendedor | visualizador
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    invite_code: str
+
+class InviteCreate(BaseModel):
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
 
 class UserOut(BaseModel):
     id: str
@@ -114,6 +177,8 @@ class Supplier(BaseModel):
     cnpj: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    address: Optional[str] = None
+    distance_km: float = 0
     notes: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
@@ -148,6 +213,8 @@ class Customer(BaseModel):
     patente_om: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    distance_km: float = 0
+    signature: Optional[str] = None
     sizes_fit: Optional[str] = None
     total_spent: float = 0
     created_at: str = Field(default_factory=now_iso)
@@ -174,7 +241,7 @@ class Order(BaseModel):
     id: str = Field(default_factory=new_id)
     number: int = 0
     type: str = "VENDA"  # VENDA | TROCA | DEVOLUCAO | ORCAMENTO
-    status: str = "Orçamento"  # Orçamento | Aprovado | Separado | Entregue | Cancelado
+    status: str = "Orçamento"  # Orçamento | Aprovado | Separado | Entregue | Retirado | Cancelado
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     vendor_id: Optional[str] = None
@@ -189,8 +256,25 @@ class Order(BaseModel):
     payment: str = "PIX"
     notes: Optional[str] = None
     expected_date: Optional[str] = None
+    vehicle_id: Optional[str] = None
+    vehicle_name: Optional[str] = None
+    delivery_type: Optional[str] = None  # ENTREGA | RETIRADA
+    signature: Optional[str] = None
+    stock_applied: bool = False
     created_at: str = Field(default_factory=now_iso)
     log: List[str] = []  # log de desmontagem etc
+
+class Vehicle(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=new_id)
+    name: str
+    model: Optional[str] = None
+    plate: Optional[str] = None
+    fuel_type: Optional[str] = None
+    avg_consumption: float = 0
+    current_km: float = 0
+    active: bool = True
+    created_at: str = Field(default_factory=now_iso)
 
 class StockMovement(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -212,13 +296,23 @@ class Expense(BaseModel):
     type: str = "INSUMO"  # INSUMO | VIAGEM | MANUTENCAO
     description: str
     amount: float = 0
+    quantity: float = 0
+    remaining_quantity: float = 0
+    consumption_log: List[dict] = []
+    unit: Optional[str] = None
     supplier_id: Optional[str] = None
+    destination_type: Optional[str] = None
+    destination_id: Optional[str] = None
+    vehicle_id: Optional[str] = None
+    vehicle_name: Optional[str] = None
     date: str = Field(default_factory=now_iso)
     # Viagem
     fuel_type: Optional[str] = None
     fuel_cost: float = 0
     toll_cost: float = 0
     avg_consumption: Optional[float] = None
+    fuel_liters: float = 0
+    fuel_price_per_liter: float = 0
     km: float = 0
     route: Optional[str] = None
     # Manutencao
@@ -253,12 +347,15 @@ class Settings(BaseModel):
     print_header_html: str = ""
     print_footer_text: str = "Obrigado pela preferência! - Lokal Militar"
 
-ACTIVE_STATUSES = ("Aprovado", "Separado", "Entregue")
+ACTIVE_STATUSES = ("Aprovado", "Separado", "Entregue", "Retirado")
 
 class Vendor(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
     name: str
+    phone: Optional[str] = None
+    cpf: Optional[str] = None
+    signature: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
 # ---------- Simple generic CRUD factory ----------
@@ -274,7 +371,18 @@ def make_crud(coll_name: str, Model):
     async def create(payload: dict, user: dict = Depends(get_current_user)):
         obj = Model(**payload)
         doc = obj.model_dump()
+        if coll_name == "vendors" and doc.get("signature"):
+            signature = doc["signature"]
+            if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
+                raise HTTPException(400, "Assinatura do vendedor inválida")
+        if coll_name == "expenses" and doc.get("type") == "INSUMO":
+            if "remaining_quantity" not in payload:
+                doc["remaining_quantity"] = max(float(doc.get("quantity") or 0), 0)
+        if coll_name == "expenses" and doc.get("type") == "VIAGEM":
+            doc = await _prepare_trip(doc)
         await db[coll_name].insert_one(doc)
+        if coll_name == "expenses" and doc.get("type") == "VIAGEM":
+            await _change_vehicle_km(doc.get("vehicle_id"), float(doc.get("km") or 0), required=bool(doc.get("vehicle_id")))
         return strip_mongo(doc)
 
     @router.get("/{item_id}")
@@ -287,15 +395,43 @@ def make_crud(coll_name: str, Model):
     @router.put("/{item_id}")
     async def update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
         payload.pop("id", None)
+        if coll_name == "vendors" and payload.get("signature"):
+            signature = payload["signature"]
+            if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
+                raise HTTPException(400, "Assinatura do vendedor inválida")
+        old = None
+        if coll_name == "expenses":
+            old = await db.expenses.find_one({"id": item_id}, {"_id": 0})
+            if not old:
+                raise HTTPException(404, "Not found")
+            updated = {**old, **payload}
+            if updated.get("type") == "VIAGEM":
+                updated = await _prepare_trip(updated)
+            payload = {key: value for key, value in updated.items() if key != "id"}
         res = await db[coll_name].update_one({"id": item_id}, {"$set": payload})
         if res.matched_count == 0:
             raise HTTPException(404, "Not found")
+        if coll_name == "expenses" and old:
+            old_km = float(old.get("km") or 0) if old.get("type") == "VIAGEM" else 0
+            new_km = float(payload.get("km") or 0) if payload.get("type") == "VIAGEM" else 0
+            old_vehicle = old.get("vehicle_id") if old.get("type") == "VIAGEM" else None
+            new_vehicle = payload.get("vehicle_id") if payload.get("type") == "VIAGEM" else None
+            if old_vehicle == new_vehicle:
+                await _change_vehicle_km(old_vehicle, new_km - old_km)
+            else:
+                await _change_vehicle_km(old_vehicle, -old_km)
+                await _change_vehicle_km(new_vehicle, new_km)
         doc = await db[coll_name].find_one({"id": item_id}, {"_id": 0})
         return doc
 
     @router.delete("/{item_id}")
     async def delete(item_id: str, user: dict = Depends(get_current_user)):
+        old = await db[coll_name].find_one({"id": item_id}, {"_id": 0}) if coll_name == "expenses" else None
+        if old and old.get("order_id"):
+            raise HTTPException(400, "A viagem vinculada a um pedido não pode ser excluída por aqui")
         res = await db[coll_name].delete_one({"id": item_id})
+        if old and old.get("type") == "VIAGEM":
+            await _change_vehicle_km(old.get("vehicle_id"), -float(old.get("km") or 0))
         return {"deleted": res.deleted_count}
 
     return router
@@ -311,9 +447,124 @@ async def login(payload: LoginIn):
     user.pop("password_hash", None)
     return {"access_token": token, "token_type": "bearer", "user": user}
 
+@api.post("/auth/register")
+async def register_user(payload: UserRegister):
+    if len(payload.password) < 8:
+        raise HTTPException(400, "A senha deve ter pelo menos 8 caracteres")
+    email = payload.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "E-mail já cadastrado")
+    invite_hash = hashlib.sha256(payload.invite_code.strip().encode()).hexdigest()
+    claimed_at = now_iso()
+    stale_claim_before = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+    claim_is_available = {
+        "$or": [
+            {"claimed_at": {"$exists": False}},
+            {"claimed_at": {"$lt": stale_claim_before}},
+        ]
+    }
+    invite = await db.registration_invites.find_one({
+        "code_hash": invite_hash,
+        "revoked_at": {"$exists": False},
+        "used_at": {"$exists": False},
+        "expires_at": {"$gt": claimed_at},
+        **claim_is_available,
+    })
+    if not invite:
+        raise HTTPException(400, "Convite inválido, expirado ou já utilizado")
+    claim = await db.registration_invites.update_one(
+        {
+            "id": invite["id"],
+            "revoked_at": {"$exists": False},
+            "used_at": {"$exists": False},
+            "expires_at": {"$gt": claimed_at},
+            **claim_is_available,
+        },
+        {"$set": {"claimed_at": claimed_at, "claimed_email": email}},
+    )
+    if claim.modified_count != 1:
+        raise HTTPException(400, "Este convite já foi utilizado ou expirou")
+    doc = {
+        "id": new_id(),
+        "email": email,
+        "name": payload.name,
+        "role": "visualizador",
+        "pending": True,
+        "password_hash": hash_pw(payload.password),
+        "created_at": now_iso(),
+    }
+    try:
+        await db.users.insert_one(doc)
+        finalized = await db.registration_invites.update_one(
+            {"id": invite["id"], "claimed_email": email, "used_at": {"$exists": False}, "revoked_at": {"$exists": False}},
+            {"$set": {"used_at": now_iso(), "used_by": doc["id"]}, "$unset": {"claimed_at": "", "claimed_email": ""}},
+        )
+        if finalized.modified_count != 1:
+            await db.users.delete_one({"id": doc["id"]})
+            raise HTTPException(409, "Não foi possível confirmar o uso do convite")
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Falha ao criar usuário com convite %s", invite["id"])
+        await db.registration_invites.update_one(
+            {"id": invite["id"], "claimed_email": email, "used_at": {"$exists": False}},
+            {"$unset": {"claimed_at": "", "claimed_email": ""}},
+        )
+        raise HTTPException(500, "Não foi possível concluir o cadastro")
+    doc.pop("_id", None)
+    doc.pop("password_hash", None)
+    return doc
+
+@api.post("/auth/invitations")
+async def create_registration_invite(
+    payload: InviteCreate,
+    user: dict = Depends(require_admin),
+):
+    code = secrets.token_urlsafe(32)
+    doc = {
+        "id": new_id(),
+        "code_hash": hashlib.sha256(code.encode()).hexdigest(),
+        "created_by": user["id"],
+        "created_at": now_iso(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)).isoformat(),
+    }
+    await db.registration_invites.insert_one(doc)
+    return {
+        "id": doc["id"],
+        "code": code,
+        "created_at": doc["created_at"],
+        "expires_at": doc["expires_at"],
+        "expires_in_days": payload.expires_in_days,
+    }
+
+@api.get("/auth/invitations")
+async def list_registration_invites(user: dict = Depends(require_admin)):
+    docs = await db.registration_invites.find({}, {"_id": 0, "code_hash": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+@api.delete("/auth/invitations/{invite_id}")
+async def revoke_registration_invite(invite_id: str, user: dict = Depends(require_admin)):
+    result = await db.registration_invites.update_one(
+        {"id": invite_id, "used_at": {"$exists": False}, "revoked_at": {"$exists": False}},
+        {"$set": {"revoked_at": now_iso(), "revoked_by": user["id"]}, "$unset": {"claimed_at": "", "claimed_email": ""}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Convite ativo não encontrado")
+    return {"revoked": True}
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
+
+@api.put("/auth/password")
+async def change_password(payload: PasswordChange, user: dict = Depends(get_current_user)):
+    stored_user = await db.users.find_one({"id": user["id"]})
+    if not stored_user or not verify_pw(payload.current_password, stored_user.get("password_hash", "")):
+        raise HTTPException(400, "Senha atual incorreta")
+    if len(payload.new_password) < 8:
+        raise HTTPException(400, "A nova senha deve ter pelo menos 8 caracteres")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_pw(payload.new_password)}})
+    return {"changed": True}
 
 @api.get("/auth/users")
 async def list_users(user: dict = Depends(get_current_user)):
@@ -322,6 +573,8 @@ async def list_users(user: dict = Depends(get_current_user)):
 
 @api.post("/auth/users")
 async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
+    if payload.role not in ("admin", "vendedor", "visualizador"):
+        raise HTTPException(400, "Perfil inválido")
     existing = await db.users.find_one({"email": payload.email.lower()})
     if existing:
         raise HTTPException(400, "Email já cadastrado")
@@ -330,6 +583,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         "email": payload.email.lower(),
         "name": payload.name,
         "role": payload.role,
+        "pending": payload.role == "visualizador",
         "password_hash": hash_pw(payload.password),
         "created_at": now_iso(),
     }
@@ -341,9 +595,22 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
 @api.put("/auth/users/{uid}")
 async def update_user(uid: str, payload: dict, user: dict = Depends(require_admin)):
     upd = {k: v for k, v in payload.items() if k in ("name", "role", "email")}
+    if "role" in upd and upd["role"] not in ("admin", "vendedor", "visualizador"):
+        raise HTTPException(400, "Perfil inválido")
+    if "email" in upd:
+        upd["email"] = str(upd["email"]).lower()
+        duplicate = await db.users.find_one({"email": upd["email"], "id": {"$ne": uid}})
+        if duplicate:
+            raise HTTPException(400, "E-mail já cadastrado")
+    if "role" in upd:
+        upd["pending"] = upd["role"] == "visualizador"
     if payload.get("password"):
+        if len(payload["password"]) < 8:
+            raise HTTPException(400, "A senha deve ter pelo menos 8 caracteres")
         upd["password_hash"] = hash_pw(payload["password"])
-    await db.users.update_one({"id": uid}, {"$set": upd})
+    result = await db.users.update_one({"id": uid}, {"$set": upd})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Usuário não encontrado")
     doc = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
     return doc
 
@@ -359,8 +626,29 @@ api.include_router(make_crud("categories", Category))
 api.include_router(make_crud("size_grids", SizeGrid))
 api.include_router(make_crud("suppliers", Supplier))
 api.include_router(make_crud("customers", Customer))
+api.include_router(make_crud("vehicles", Vehicle))
 api.include_router(make_crud("expenses", Expense))
 api.include_router(make_crud("vendors", Vendor))
+
+@api.post("/expenses/{expense_id}/consume")
+async def consume_supply(expense_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    quantity = float(payload.get("quantity") or 0)
+    if quantity <= 0:
+        raise HTTPException(400, "Informe uma quantidade maior que zero")
+    expense = await db.expenses.find_one({"id": expense_id})
+    if not expense or expense.get("type") != "INSUMO":
+        raise HTTPException(404, "Insumo não encontrado")
+    remaining = float(expense.get("remaining_quantity") or 0)
+    if quantity > remaining:
+        raise HTTPException(400, f"Quantidade indisponível. Restam {remaining:g} {expense.get('unit') or ''}".strip())
+    result = await db.expenses.update_one(
+        {"id": expense_id, "remaining_quantity": {"$gte": quantity}},
+        {"$inc": {"remaining_quantity": -quantity},
+         "$push": {"consumption_log": {"quantity": quantity, "date": now_iso(), "user_id": user["id"], "user_name": user.get("name")}}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(409, "O saldo do insumo foi alterado. Atualize a página e tente novamente")
+    return await db.expenses.find_one({"id": expense_id}, {"_id": 0})
 
 # ---------- Products (custom to validate kit) ----------
 @api.get("/products")
@@ -448,6 +736,12 @@ async def _cover_shortage(prod: dict, size, qty: float, order: dict, log: List[s
 
 
 # ---------- Stock movements ----------
+def _stock_movement_delta(movement: dict) -> float:
+    qty = abs(float(movement.get("qty", 0)))
+    if movement.get("kind") in ("ENTRADA", "DESMONTAGEM_ENTRADA", "DESMONTAGEM_INV"):
+        return qty
+    return -qty
+
 @api.get("/stock_movements")
 async def list_stock(user: dict = Depends(get_current_user)):
     return await db.stock_movements.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
@@ -456,17 +750,34 @@ async def list_stock(user: dict = Depends(get_current_user)):
 async def create_stock(payload: dict, user: dict = Depends(get_current_user)):
     obj = StockMovement(**payload)
     doc = obj.model_dump()
+    if doc["qty"] <= 0:
+        raise HTTPException(400, "A quantidade deve ser maior que zero")
+    if doc["kind"] not in ("ENTRADA", "SAIDA", "AVARIA"):
+        raise HTTPException(400, "Tipo de movimentação inválido")
+    if doc["order_id"]:
+        raise HTTPException(400, "Movimentações de pedidos devem ser removidas pelo próprio pedido")
+    product = await db.products.find_one({"id": doc["product_id"]}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Produto não encontrado")
+    if product.get("sizes") and not any(size.get("size") == doc.get("size") for size in product["sizes"]):
+        raise HTTPException(400, "Tamanho não cadastrado para este produto")
     await db.stock_movements.insert_one(doc)
-    delta = doc["qty"] if doc["kind"] in ("ENTRADA", "DESMONTAGEM_INV") else -abs(doc["qty"])
-    if doc["kind"] == "ENTRADA":
-        delta = abs(doc["qty"])
-    elif doc["kind"] in ("SAIDA", "AVARIA"):
-        delta = -abs(doc["qty"])
+    delta = _stock_movement_delta(doc)
     await _change_stock(doc["product_id"], doc.get("size"), delta)
     return strip_mongo(doc)
 
 @api.delete("/stock_movements/{mid}")
 async def del_stock(mid: str, user: dict = Depends(get_current_user)):
+    movement = await db.stock_movements.find_one({"id": mid})
+    if not movement:
+        raise HTTPException(404, "Movimentação não encontrada")
+    if movement.get("order_id"):
+        raise HTTPException(400, "Exclua o pedido relacionado para estornar esta movimentação")
+    await _change_stock(
+        movement["product_id"],
+        movement.get("size"),
+        -_stock_movement_delta(movement),
+    )
     await db.stock_movements.delete_one({"id": mid})
     return {"deleted": 1}
 
@@ -497,6 +808,17 @@ async def _next_order_number() -> int:
 
 async def _apply_order_stock(order: dict):
     """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
+    items = order.get("items", []) + order.get("returned_items", [])
+    for item in items:
+        quantity = float(item.get("qty", 1))
+        if quantity <= 0:
+            raise HTTPException(400, "A quantidade dos itens deve ser maior que zero")
+        product = await db.products.find_one({"id": item.get("product_id")}, {"_id": 0})
+        if not product:
+            raise HTTPException(400, f"Produto do pedido não encontrado: {item.get('name') or item.get('product_id')}")
+        sizes = product.get("sizes", [])
+        if sizes and not any(size.get("size") == item.get("size") for size in sizes):
+            raise HTTPException(400, f"Tamanho não cadastrado para {product.get('name')}")
     log = order.get("log", [])
     for it in order.get("items", []):
         pid = it["product_id"]
@@ -524,6 +846,31 @@ async def _apply_order_stock(order: dict):
         })
     if log:
         await db.orders.update_one({"id": order["id"]}, {"$set": {"log": log}})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"stock_applied": True}})
+
+async def _reverse_order_stock(order_id: str):
+    movements = await db.stock_movements.find({"order_id": order_id}).to_list(10000)
+    for movement in movements:
+        await _change_stock(
+            movement["product_id"],
+            movement.get("size"),
+            -_stock_movement_delta(movement),
+        )
+    if movements:
+        await db.stock_movements.delete_many({"order_id": order_id})
+    await db.orders.update_one({"id": order_id}, {"$set": {"stock_applied": False}})
+
+async def _has_order_stock_movements(order_id: str) -> bool:
+    return await db.stock_movements.count_documents({"order_id": order_id}) > 0
+
+def _order_is_fulfilled(order: dict) -> bool:
+    return order.get("status") in ("Entregue", "Retirado")
+
+def _stock_relevant_order_fields(order: dict) -> dict:
+    return {
+        key: order.get(key)
+        for key in ("type", "items", "returned_items")
+    }
 
 @api.get("/orders")
 async def list_orders(user: dict = Depends(get_current_user)):
@@ -544,20 +891,19 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
     payload["total"] = max(0, subtotal - discount)
     obj = Order(**payload)
     doc = obj.model_dump()
+    if _order_is_fulfilled(doc):
+        raise HTTPException(400, "Conclua o pedido pela ação Entregar/Retirar")
     await db.orders.insert_one(doc)
-    # Stock & commission on APROVADO/ENTREGUE
     if doc["status"] in ACTIVE_STATUSES and doc["type"] in ("VENDA",):
-        await _apply_order_stock(doc)
         await _record_commission(doc)
-    if doc["type"] in ("TROCA", "DEVOLUCAO"):
-        await _apply_order_stock(doc)
     return strip_mongo(doc)
 
-@api.put("/orders/{oid}")
-async def update_order(oid: str, payload: dict, user: dict = Depends(get_current_user)):
+async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: bool = False):
     old = await db.orders.find_one({"id": oid})
     if not old:
         raise HTTPException(404, "Pedido não encontrado")
+    if payload.get("status") in ("Entregue", "Retirado") and not _order_is_fulfilled(old) and not allow_fulfillment:
+        raise HTTPException(400, "Use a ação Entregar/Retirar para concluir o pedido")
     payload.pop("id", None)
     payload.pop("number", None)
     items = payload.get("items", old.get("items", []))
@@ -567,18 +913,99 @@ async def update_order(oid: str, payload: dict, user: dict = Depends(get_current
     payload["items"] = items
     discount = float(payload.get("discount", old.get("discount", 0)))
     payload["total"] = max(0, subtotal - discount)
+    old_stock_applied = old.get("stock_applied")
+    if old_stock_applied is None:
+        old_stock_applied = await _has_order_stock_movements(oid)
+    old_stock_fields = _stock_relevant_order_fields(old)
     await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
-    # Status transition to Aprovado/Entregue → trigger stock + commission once
+    stock_fields_changed = old_stock_fields != _stock_relevant_order_fields(doc)
+    if old_stock_applied and (not _order_is_fulfilled(doc) or stock_fields_changed):
+        await _reverse_order_stock(oid)
+        old_stock_applied = False
+    if not old_stock_applied and _order_is_fulfilled(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
+        await _apply_order_stock(doc)
+        doc["stock_applied"] = True
+    # Commissions start when a sale is approved; stock moves only on delivery or pickup.
     was_active = old.get("status") in ACTIVE_STATUSES
     now_active = doc.get("status") in ACTIVE_STATUSES
     if (not was_active) and now_active and doc.get("type") == "VENDA":
-        await _apply_order_stock(doc)
         await _record_commission(doc)
     return doc
 
+@api.put("/orders/{oid}")
+async def update_order(oid: str, payload: dict, user: dict = Depends(get_current_user)):
+    return await _update_order(oid, payload, user)
+
+@api.post("/orders/{oid}/fulfill")
+async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if _order_is_fulfilled(order):
+        raise HTTPException(400, "O pedido já foi entregue ou retirado")
+    delivery_type = payload.get("delivery_type")
+    if delivery_type not in ("ENTREGA", "RETIRADA"):
+        raise HTTPException(400, "Selecione entrega ou retirada")
+    update = {
+        "status": "Entregue" if delivery_type == "ENTREGA" else "Retirado",
+        "delivery_type": delivery_type,
+    }
+    vehicle_id = payload.get("vehicle_id")
+    if vehicle_id:
+        vehicle = await db.vehicles.find_one({"id": vehicle_id, "active": {"$ne": False}}, {"_id": 0})
+        if not vehicle:
+            raise HTTPException(400, "Veículo não encontrado ou inativo")
+        update.update({"vehicle_id": vehicle_id, "vehicle_name": vehicle["name"]})
+    signature = payload.get("signature")
+    if signature:
+        if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
+            raise HTTPException(400, "Assinatura inválida")
+        update["signature"] = signature
+    completed = await _update_order(oid, update, user, allow_fulfillment=True)
+    if signature and order.get("customer_id"):
+        await db.customers.update_one({"id": order["customer_id"]}, {"$set": {"signature": signature}})
+    if delivery_type == "ENTREGA":
+        customer = await db.customers.find_one({"id": order.get("customer_id")}, {"_id": 0}) if order.get("customer_id") else None
+        distance = max(float((customer or {}).get("distance_km") or 0), 0)
+        trip = {
+            "id": new_id(),
+            "type": "VIAGEM",
+            "description": f"Entrega do pedido #{order.get('number')}",
+            "amount": 0,
+            "quantity": 0,
+            "remaining_quantity": 0,
+            "date": now_iso(),
+            "km": distance * 2,
+            "route": f"Depósito → {(customer or {}).get('address') or order.get('customer_name') or 'Cliente'} → Depósito",
+            "destination_type": "cliente" if customer else None,
+            "destination_id": customer.get("id") if customer else None,
+            "vehicle_id": completed.get("vehicle_id"),
+            "vehicle_name": completed.get("vehicle_name"),
+            "order_id": oid,
+            "fuel_cost": 0,
+            "fuel_liters": 0,
+            "fuel_price_per_liter": 0,
+            "toll_cost": 0,
+            "avg_consumption": 0,
+        }
+        await _prepare_trip(trip)
+        await db.expenses.insert_one(trip)
+        await _change_vehicle_km(trip.get("vehicle_id"), float(trip.get("km") or 0))
+    return completed
+
 @api.delete("/orders/{oid}")
 async def delete_order(oid: str, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": oid})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if await _has_order_stock_movements(oid):
+        await _reverse_order_stock(oid)
+    delivery_trips = await db.expenses.find({"order_id": oid, "type": "VIAGEM"}).to_list(100)
+    for trip in delivery_trips:
+        await _change_vehicle_km(trip.get("vehicle_id"), -float(trip.get("km") or 0))
+    if delivery_trips:
+        await db.expenses.delete_many({"order_id": oid, "type": "VIAGEM"})
     await db.orders.delete_one({"id": oid})
     await db.commissions.delete_many({"order_id": oid})
     return {"deleted": 1}
@@ -636,7 +1063,7 @@ async def update_settings(payload: dict, user: dict = Depends(get_current_user))
 
 # ---------- Dashboard summary ----------
 @api.get("/dashboard")
-async def dashboard(user: dict = Depends(get_current_user)):
+async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7, ge=7, le=30)):
     products = await db.products.find({}, {"_id": 0}).to_list(5000)
     categories = await db.categories.find({}, {"_id": 0}).to_list(500)
     cat_map = {c["id"]: c for c in categories}
@@ -674,7 +1101,7 @@ async def dashboard(user: dict = Depends(get_current_user)):
     manut_alerts = sum(1 for e in exps if e.get("type") == "MANUTENCAO" and e.get("next_review_date") and e["next_review_date"][:10] <= soon)
     # sales chart last 7 days
     chart = []
-    for i in range(6, -1, -1):
+    for i in range(days - 1, -1, -1):
         day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
         total_day = sum(o.get("total", 0) for o in orders
                         if (o.get("created_at", "") or "").startswith(day)
@@ -711,19 +1138,6 @@ logger = logging.getLogger("lokal")
 
 @app.on_event("startup")
 async def startup():
-    # Seed admin
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@lokalmilitar.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "lokal123")
-    existing = await db.users.find_one({"email": admin_email})
-    if not existing:
-        await db.users.insert_one({
-            "id": new_id(),
-            "email": admin_email,
-            "name": "Administrador",
-            "role": "admin",
-            "password_hash": hash_pw(admin_password),
-            "created_at": now_iso(),
-        })
     # Seed size grids
     if await db.size_grids.count_documents({}) == 0:
         await db.size_grids.insert_many([

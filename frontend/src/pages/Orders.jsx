@@ -1,10 +1,13 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
+import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, Edit, Trash2, Printer, FileText } from "lucide-react";
+import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
+import CustomerSignaturePad from "@/components/CustomerSignaturePad";
 
 const BLANK_ORDER = {
   type: "VENDA", status: "Orçamento", customer_id: "", customer_name: "",
@@ -14,9 +17,14 @@ const BLANK_ORDER = {
 
 export default function Orders({ mode }) {
   const isTrocas = mode === "trocas";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoPrintOrderId = searchParams.get("printOrder");
+  const autoPrintStarted = useRef(false);
   const [orders, setOrders] = useState([]);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
   const [settings, setSettings] = useState({});
   const [vendors, setVendors] = useState([]);
   const [open, setOpen] = useState(false);
@@ -25,18 +33,29 @@ export default function Orders({ mode }) {
   const [printMode, setPrintMode] = useState("a4"); // a4 | 80
   const [reportOpen, setReportOpen] = useState(false);
   const [reportFilter, setReportFilter] = useState({ from: "", to: "", type: "ALL" });
+  const [fulfillment, setFulfillment] = useState(null);
+  const [autoPrintPending, setAutoPrintPending] = useState(false);
+  const [savingJpeg, setSavingJpeg] = useState(false);
+  const jpegTargetRef = useRef(null);
 
   const load = async () => {
-    const [o, p, c, s, v] = await Promise.all([
-      api.get("/orders"), api.get("/products"), api.get("/customers"), api.get("/settings"), api.get("/vendors"),
-    ]);
-    setOrders(o.data); setProducts(p.data); setCustomers(c.data); setSettings(s.data); setVendors(v.data);
+    try {
+      const [o, p, c, s, v, vehiclesResponse] = await Promise.all([
+        api.get("/orders"), api.get("/products"), api.get("/customers"), api.get("/settings"), api.get("/vendors"), api.get("/vehicles"),
+      ]);
+      setOrders(o.data); setProducts(p.data); setCustomers(c.data); setSettings(s.data); setVendors(v.data);
+      setVehicles(vehiclesResponse.data.filter((vehicle) => vehicle.active !== false));
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível carregar os pedidos");
+    } finally {
+      setOrdersLoaded(true);
+    }
   };
   useEffect(() => { load(); }, []);
 
   const prodById = useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
 
-  const openNew = () => { setEditing({ ...BLANK_ORDER, ...(isTrocas ? { type: "TROCA", status: "Entregue" } : {}) }); setOpen(true); };
+  const openNew = () => { setEditing({ ...BLANK_ORDER, ...(isTrocas ? { type: "TROCA" } : {}) }); setOpen(true); };
   const shownOrders = orders.filter(o => isTrocas ? ["TROCA","DEVOLUCAO"].includes(o.type) : true);
   const openEdit = (o) => { setEditing(JSON.parse(JSON.stringify(o))); setOpen(true); };
 
@@ -60,10 +79,16 @@ export default function Orders({ mode }) {
 
   const remove = async (id) => {
     if (!window.confirm("Excluir pedido?")) return;
-    await api.delete(`/orders/${id}`); load();
+    try {
+      await api.delete(`/orders/${id}`);
+      toast.success("Pedido excluído e estoque estornado quando aplicável");
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível excluir o pedido");
+    }
   };
 
-  const doPrint = (order, mode) => {
+  const doPrint = useCallback((order, mode) => {
     const linked = orders.filter(o => o.original_order_id === order.id);
     const merged = {
       ...order,
@@ -72,10 +97,75 @@ export default function Orders({ mode }) {
     };
     const original = orders.find(o => o.id === order.original_order_id);
     setPrinting({ ...merged, original_number: original?.number }); setPrintMode(mode);
+  }, [orders]);
+  useEffect(() => {
+    if (!autoPrintOrderId || !ordersLoaded || autoPrintStarted.current) return;
+    const order = orders.find((item) => item.id === autoPrintOrderId);
+    if (!order) {
+      toast.error("Pedido relacionado não encontrado");
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    autoPrintStarted.current = true;
+    doPrint(order, "a4");
+    setAutoPrintPending(true);
+    setSearchParams({}, { replace: true });
+  }, [autoPrintOrderId, doPrint, orders, ordersLoaded, setSearchParams]);
+  useEffect(() => {
+    if (!autoPrintPending || !printing) return undefined;
+    const timeout = window.setTimeout(() => {
+      setAutoPrintPending(false);
+      window.print();
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [autoPrintPending, printing]);
+
+  const completeOrder = async () => {
+    if (!fulfillment) return;
+    try {
+      await api.post(`/orders/${fulfillment.order.id}/fulfill`, {
+        delivery_type: fulfillment.delivery_type,
+        vehicle_id: fulfillment.delivery_type === "ENTREGA" ? fulfillment.vehicle_id || null : null,
+        signature: fulfillment.signature || null,
+      });
+      toast.success(fulfillment.delivery_type === "ENTREGA" ? "Pedido entregue e estoque atualizado" : "Pedido retirado e estoque atualizado");
+      setFulfillment(null);
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível concluir o pedido");
+    }
   };
   const runPrint = (pdf) => {
     if (pdf) toast.info("Na janela de impressão, escolha 'Salvar como PDF' como destino");
     setTimeout(() => window.print(), pdf ? 600 : 50);
+  };
+  const saveJpeg = async () => {
+    if (printMode !== "a4" || !jpegTargetRef.current || savingJpeg) return;
+    setSavingJpeg(true);
+    try {
+      if (document.fonts?.ready) await document.fonts.ready;
+      const canvas = await html2canvas(jpegTargetRef.current, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        logging: false,
+        useCORS: true,
+      });
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Não foi possível gerar a imagem JPEG")), "image/jpeg", 0.95);
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `pedido-${printing.number}-lokal-militar.jpg`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success("Imagem JPEG do pedido salva");
+    } catch (error) {
+      console.error("Erro ao exportar pedido como JPEG", error);
+      toast.error("Não foi possível gerar o JPEG. Tente novamente ou use a opção de impressão.");
+    } finally {
+      setSavingJpeg(false);
+    }
   };
 
   const filteredReport = () => {
@@ -114,7 +204,7 @@ export default function Orders({ mode }) {
   return (
     <div data-testid="orders-page">
       <header className="lm-page-head flex items-end justify-between flex-wrap gap-2">
-        <div><h1>{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1><p>{isTrocas ? "Trocas vinculadas a pedidos ou avulsas" : "Estoque e comissão são lançados quando o pedido fica Aprovado, Separado ou Entregue"}</p></div>
+        <div><h1>{isTrocas ? "Trocas e Devoluções" : "Pedidos & PDV"}</h1><p>{isTrocas ? "Trocas vinculadas a pedidos ou avulsas" : "O estoque é lançado somente quando o pedido é entregue ou retirado"}</p></div>
         <div className="flex gap-2">
           <button className="lm-btn lm-btn-dark" onClick={()=>setReportOpen(true)} data-testid="btn-report">
             <FileText size={14}/>Relatórios de Saídas
@@ -140,8 +230,11 @@ export default function Orders({ mode }) {
                 <td>{formatBRL(o.total||0)}</td>
                 <td>{o.payment}</td>
                 <td><span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span></td>
-                <td className="flex gap-1 py-2">
+                <td className="flex gap-1 py-2 flex-wrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>openEdit(o)} data-testid={`edit-order-${o.number}`}><Edit size={13}/></button>
+                  {!["Entregue", "Retirado"].includes(o.status) && (
+                    <button className="p-1 hover:bg-green-100 text-green-800" onClick={()=>setFulfillment({ order:o, delivery_type:"ENTREGA", vehicle_id:"", signature:o.signature || cust(o.customer_id)?.signature || "" })} title="Registrar entrega ou retirada" data-testid={`fulfill-order-${o.number}`}><Truck size={13}/></button>
+                  )}
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>doPrint(o,"a4")} data-testid={`print-a4-${o.number}`}><Printer size={13}/></button>
                   <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"80")} data-testid={`print-80-${o.number}`}>80mm</button>
                   <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"a4")} data-testid={`print-pdf-${o.number}`}>PDF</button>
@@ -156,7 +249,7 @@ export default function Orders({ mode }) {
 
       {/* Hidden print area */}
       <div id="print-area" style={{ position:"absolute", left:"-9999px", top:0 }}>
-        {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)}/>}
+        {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={vendors.find((item) => item.id === printing.vendor_id)}/>}
         {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
       </div>
 
@@ -170,10 +263,11 @@ export default function Orders({ mode }) {
             </div>
             <button className="lm-btn lm-btn-olive" onClick={() => runPrint(false)} data-testid="preview-print"><Printer size={15}/>Imprimir</button>
             <button className="lm-btn lm-btn-gold" onClick={() => runPrint(true)} data-testid="preview-pdf"><FileText size={15}/>Salvar PDF</button>
+            {printMode === "a4" && <button className="lm-btn lm-btn-outline" onClick={saveJpeg} disabled={savingJpeg} data-testid="preview-jpeg"><Download size={15}/>{savingJpeg ? "Gerando JPEG..." : "Salvar JPEG"}</button>}
           </div>
           <div className="bg-neutral-300 p-4 rounded flex justify-center overflow-x-auto">
             <div className="shadow-lg">
-              {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)}/>}
+              {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={vendors.find((item) => item.id === printing.vendor_id)} captureRef={jpegTargetRef}/>}
               {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
             </div>
           </div>
@@ -192,8 +286,9 @@ export default function Orders({ mode }) {
                     <option>VENDA</option><option>TROCA</option><option>DEVOLUCAO</option><option>ORCAMENTO</option>
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Status</div>
-                  <select className="input" value={editing.status} onChange={e=>setEditing({...editing, status:e.target.value})}>
-                    <option>Orçamento</option><option>Aprovado</option><option>Separado</option><option>Entregue</option><option>Cancelado</option>
+                  <select className="input" value={editing.status} disabled={["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
+                    <option>Orçamento</option><option>Aprovado</option><option>Separado</option><option>Cancelado</option>
+                    {["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Pagamento</div>
                   <select className="input" value={editing.payment} onChange={e=>setEditing({...editing, payment:e.target.value})}>
@@ -247,22 +342,28 @@ export default function Orders({ mode }) {
                   <button type="button" className="text-xs underline" onClick={addItem}>+ Produto</button>
                 </div>
                 {editing.items.map((it, i)=>(
-                  <div key={i} className="grid grid-cols-12 gap-2 mt-2 items-center">
-                    <select className="input col-span-5" value={it.product_id} onChange={e=>{
+                  <div key={i} className="grid grid-cols-4 sm:grid-cols-[repeat(15,minmax(0,1fr))] gap-2 mt-2 items-end">
+                    <select className="input col-span-4 sm:col-span-5" value={it.product_id} onChange={e=>{
                       const p = prodById[e.target.value];
                       setItem(i, { product_id:e.target.value, name:p?.name||"", sku:p?.sku||"", unit_price:p?.price||0 });
                     }}>
                       <option value="">— Produto —</option>
                       {products.map(p=><option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
                     </select>
-                    <select className="input col-span-2" value={it.size||""} onChange={e=>setItem(i,{size:e.target.value})} data-testid={`item-size-${i}`}>
+                    <select className="input col-span-2 sm:col-span-2" value={it.size||""} onChange={e=>setItem(i,{size:e.target.value})} data-testid={`item-size-${i}`} aria-label={`Tamanho do item ${i + 1}`}>
                       <option value="">Tam</option>
                       {(prodById[it.product_id]?.sizes||[]).map(s=><option key={s.size} value={s.size}>{s.size} ({s.stock})</option>)}
                     </select>
-                    <input className="input col-span-1" type="number" placeholder="Qtd" value={it.qty} onChange={e=>setItem(i,{qty:Number(e.target.value)})}/>
-                    <input className="input col-span-2" type="number" step="0.01" placeholder="Vl Unit" value={it.unit_price} onChange={e=>setItem(i,{unit_price:Number(e.target.value)})}/>
-                    <div className="col-span-1 text-xs text-right">{formatBRL(it.qty*it.unit_price)}</div>
-                    <button type="button" className="col-span-1 text-red-700" onClick={()=>setEditing({...editing, items:editing.items.filter((_,x)=>x!==i)})}>×</button>
+                    <label className="col-span-2 sm:col-span-2 min-w-0">
+                      <span className="block text-[10px] leading-tight text-neutral-600 mb-1">Quantidade</span>
+                      <input className="input" type="number" min="1" step="1" value={it.qty} onChange={e=>setItem(i,{qty:Number(e.target.value)})} aria-label={`Quantidade do item ${i + 1}`}/>
+                    </label>
+                    <label className="col-span-2 sm:col-span-3 min-w-0">
+                      <span className="block text-[10px] leading-tight text-neutral-600 mb-1">Valor unitário (R$)</span>
+                      <input className="input" type="number" min="0" step="0.01" value={it.unit_price} onChange={e=>setItem(i,{unit_price:Number(e.target.value)})} aria-label={`Valor unitário do item ${i + 1} em reais`}/>
+                    </label>
+                    <div className="col-span-2 sm:col-span-2 text-xs text-right" aria-label={`Subtotal do item ${i + 1}`}>Subtotal: {formatBRL(it.qty*it.unit_price)}</div>
+                    <button type="button" className="col-span-2 sm:col-span-1 text-red-700" onClick={()=>setEditing({...editing, items:editing.items.filter((_,x)=>x!==i)})} aria-label={`Remover item ${i + 1}`}>×</button>
                   </div>
                 ))}
               </div>
@@ -276,8 +377,8 @@ export default function Orders({ mode }) {
                     <button type="button" className="text-xs underline" onClick={()=>addReturnItem("returned_items")}>+ Item</button>
                   </div>
                   {(editing.returned_items||[]).map((r,i)=>(
-                    <div key={i} className="grid grid-cols-12 gap-2 mt-1">
-                      <select className="input col-span-5" value={r.product_id} onChange={e=>{
+                    <div key={i} className="grid grid-cols-4 sm:grid-cols-12 gap-2 mt-1">
+                      <select className="input col-span-4 sm:col-span-5" value={r.product_id} onChange={e=>{
                         const p = prodById[e.target.value]; const ri=[...editing.returned_items];
                         ri[i] = { ...ri[i], product_id:e.target.value, name:p?.name||"" };
                         setEditing({...editing, returned_items:ri});
@@ -285,9 +386,9 @@ export default function Orders({ mode }) {
                         <option value="">—</option>
                         {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
-                      <input className="input col-span-2" placeholder="Tam" value={r.size||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].size=e.target.value; setEditing({...editing, returned_items:ri});}}/>
-                      <input className="input col-span-1" type="number" value={r.qty} onChange={e=>{const ri=[...editing.returned_items]; ri[i].qty=Number(e.target.value); setEditing({...editing, returned_items:ri});}}/>
-                      <input className="input col-span-4" placeholder="Motivo (ex: tamanho errado)" value={r.reason||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].reason=e.target.value; setEditing({...editing, returned_items:ri});}}/>
+                      <input className="input col-span-1 sm:col-span-2" placeholder="Tam" value={r.size||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].size=e.target.value; setEditing({...editing, returned_items:ri});}}/>
+                      <input className="input col-span-1 sm:col-span-1" type="number" value={r.qty} onChange={e=>{const ri=[...editing.returned_items]; ri[i].qty=Number(e.target.value); setEditing({...editing, returned_items:ri});}}/>
+                      <input className="input col-span-2 sm:col-span-4" placeholder="Motivo (ex: tamanho errado)" value={r.reason||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].reason=e.target.value; setEditing({...editing, returned_items:ri});}}/>
                     </div>
                   ))}
                 </div>
@@ -317,6 +418,39 @@ export default function Orders({ mode }) {
           )}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={!!fulfillment} onOpenChange={(isOpen) => !isOpen && setFulfillment(null)}>
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto" data-testid="order-fulfillment-dialog">
+          <DialogHeader><DialogTitle className="font-head">Concluir pedido #{fulfillment?.order.number}</DialogTitle></DialogHeader>
+          {fulfillment && (
+            <div className="space-y-4">
+              <label className="block text-sm">Como o cliente receberá o pedido?
+                <select className="input mt-1" value={fulfillment.delivery_type}
+                  onChange={(event) => setFulfillment({ ...fulfillment, delivery_type: event.target.value, vehicle_id: "" })}
+                  data-testid="fulfillment-delivery-type">
+                  <option value="ENTREGA">Entrega</option>
+                  <option value="RETIRADA">Retirada pelo cliente</option>
+                </select>
+              </label>
+              {fulfillment.delivery_type === "ENTREGA" && (
+                <label className="block text-sm">Veículo utilizado
+                  <select className="input mt-1" value={fulfillment.vehicle_id}
+                    onChange={(event) => setFulfillment({ ...fulfillment, vehicle_id: event.target.value })}
+                    data-testid="fulfillment-vehicle">
+                    <option value="">— Não informar veículo —</option>
+                    {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name}{vehicle.plate ? ` · ${vehicle.plate}` : ""}</option>)}
+                  </select>
+                </label>
+              )}
+              <CustomerSignaturePad initialValue={fulfillment.signature} onChange={(signature) => setFulfillment((current) => current ? { ...current, signature } : current)} />
+              <div className="flex justify-end gap-2">
+                <button className="lm-btn lm-btn-outline" onClick={() => setFulfillment(null)}>Cancelar</button>
+                <button className="lm-btn lm-btn-olive" onClick={completeOrder} data-testid="confirm-order-fulfillment"><Check size={14}/>Confirmar e lançar estoque</button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Report Modal */}
       {reportOpen && (

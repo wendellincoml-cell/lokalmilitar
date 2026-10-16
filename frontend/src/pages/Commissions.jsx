@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
 import { FileSpreadsheet, Printer, CircleCheck, UserPlus, Trash2 } from "lucide-react";
+import { Pencil } from "lucide-react";
+import CustomerSignaturePad from "@/components/CustomerSignaturePad";
 
 const PERIODS = [["hoje", "Hoje"], ["semana", "Semana"], ["mes", "Mês"], ["todos", "Todos"]];
 const PERIOD_LABEL = { hoje: "Hoje", semana: "Semana", mes: "Mês", todos: "Todos" };
@@ -15,22 +17,62 @@ const inPeriod = (iso, period) => {
 };
 
 function VendorsPanel({ vendors, reload }) {
-  const [name, setName] = useState("");
+  const emptyVendor = { name: "", phone: "", cpf: "", signature: "" };
+  const [form, setForm] = useState(emptyVendor);
+  const [editingId, setEditingId] = useState("");
   const add = async () => {
-    if (!name.trim()) return;
-    await api.post("/vendors", { name: name.trim().toUpperCase() }); setName(""); reload(); toast.success("Vendedor adicionado");
+    if (!form.name.trim() || !form.phone.trim() || !form.cpf.trim() || !form.signature) {
+      return toast.error("Informe nome, telefone, CPF e registre a assinatura");
+    }
+    try {
+      const payload = { ...form, name: form.name.trim().toUpperCase() };
+      if (editingId) await api.put(`/vendors/${editingId}`, payload);
+      else await api.post("/vendors", payload);
+      setForm(emptyVendor);
+      setEditingId("");
+      reload();
+      toast.success(editingId ? "Dados do vendedor atualizados" : "Vendedor cadastrado");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível salvar o vendedor");
+    }
   };
-  const del = async (id) => { if (!window.confirm("Remover vendedor?")) return; await api.delete(`/vendors/${id}`); reload(); };
+  const edit = (vendor) => {
+    setEditingId(vendor.id);
+    setForm({ name: vendor.name || "", phone: vendor.phone || "", cpf: vendor.cpf || "", signature: vendor.signature || "" });
+  };
+  const cancelEdit = () => { setEditingId(""); setForm(emptyVendor); };
+  const del = async (id) => {
+    if (!window.confirm("Remover vendedor?")) return;
+    try {
+      await api.delete(`/vendors/${id}`);
+      if (editingId === id) cancelEdit();
+      reload();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível remover o vendedor");
+    }
+  };
   return (
     <div className="lm-card p-4" data-testid="vendors-panel">
       <h2 className="font-head text-lg font-semibold mb-2">Vendedores</h2>
-      <div className="flex gap-2 mb-2">
-        <input className="lm-input" placeholder="Nome do vendedor" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} data-testid="vendor-name" />
-        <button className="lm-btn lm-btn-olive" onClick={add} data-testid="vendor-add"><UserPlus size={16} /></button>
+      <div className="space-y-2 mb-4">
+        <input className="lm-input" placeholder="Nome do vendedor" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="vendor-name" />
+        <div className="grid sm:grid-cols-2 gap-2">
+          <input className="lm-input" placeholder="Telefone" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="vendor-phone" />
+          <input className="lm-input" placeholder="CPF" value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} data-testid="vendor-cpf" />
+        </div>
+        <CustomerSignaturePad initialValue={form.signature} onChange={(signature) => setForm((current) => ({ ...current, signature }))} />
+        <div className="flex gap-2">
+          <button className="lm-btn lm-btn-olive" onClick={add} data-testid="vendor-add"><UserPlus size={16} />{editingId ? "Salvar vendedor" : "Cadastrar vendedor"}</button>
+          {editingId && <button className="lm-btn lm-btn-outline" onClick={cancelEdit}>Cancelar</button>}
+        </div>
       </div>
       {vendors.map((v) => (
-        <div key={v.id} className="flex items-center justify-between bg-[#E8E2D5] rounded px-3 py-2 mb-1 font-head text-sm">
-          {v.name}<button onClick={() => del(v.id)} data-testid={`vendor-del-${v.id}`}><Trash2 size={14} /></button>
+        <div key={v.id} className="flex items-center justify-between gap-2 bg-[#E8E2D5] rounded px-3 py-2 mb-1 font-head text-sm">
+          <div className="min-w-0"><div>{v.name}</div><div className="font-body text-xs">{v.phone || "Sem telefone"}{v.cpf ? ` · CPF ${v.cpf}` : ""}</div></div>
+          <div className="flex shrink-0">
+            <button onClick={() => edit(v)} title="Editar dados do vendedor" data-testid={`vendor-edit-${v.id}`}><Pencil size={14} /></button>
+            <button onClick={() => del(v.id)} title="Remover vendedor" data-testid={`vendor-del-${v.id}`}><Trash2 size={14} /></button>
+          </div>
         </div>
       ))}
       {vendors.length === 0 && <div className="text-xs text-neutral-500">Nenhum vendedor cadastrado.</div>}

@@ -1,14 +1,20 @@
 import React, { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Shield } from "lucide-react";
+import { api } from "@/lib/api";
 
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [inviteCode, setInviteCode] = useState(() => searchParams.get("invite") || "");
+  const [remember, setRemember] = useState(true);
+  const [registering, setRegistering] = useState(() => Boolean(searchParams.get("invite")));
   const [loading, setLoading] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
@@ -17,12 +23,27 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     try {
-      await login(email, password);
+      if (registering) {
+        if (!inviteCode.trim()) {
+          toast.error("Informe o código de convite fornecido pelo administrador");
+          return;
+        }
+        await api.post("/auth/register", { name, email, password, invite_code: inviteCode.trim() });
+        toast.success("Cadastro realizado. Você já pode entrar com acesso de visualização.");
+        setRegistering(false);
+        setPassword("");
+        setInviteCode("");
+        setSearchParams({}, { replace: true });
+        return;
+      }
+      await login(email, password, remember);
       toast.success("Bem-vindo ao LOKAL MILITAR");
       nav("/");
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Erro ao autenticar");
-    } finally { setLoading(false); }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Erro ao autenticar");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -43,20 +64,37 @@ export default function Login() {
       <div className="flex-1 flex items-center justify-center p-8">
         <form onSubmit={submit} className="w-full max-w-sm" data-testid="login-form">
           <div className="mb-8">
-            <div className="lokal-stencil text-2xl text-white">COMANDO · ACESSO</div>
-            <div className="font-mono text-xs text-neutral-500 mt-1">Entrar no painel operacional</div>
+            <div className="lokal-stencil text-2xl text-white">{registering ? "NOVO CADASTRO" : "COMANDO · ACESSO"}</div>
+            <div className="font-mono text-xs text-neutral-500 mt-1">{registering ? "O cadastro exige convite e libera inicialmente apenas visualização" : "Entrar no painel operacional"}</div>
           </div>
+          {registering && <>
+            <label className="text-xs text-neutral-400 font-mono">NOME</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} type="text" required
+              className="w-full bg-black border border-neutral-700 text-white px-3 py-2 mb-4 mt-1 rounded-sm font-mono text-sm"
+              data-testid="register-name" />
+            <label className="text-xs text-neutral-400 font-mono">CÓDIGO DE CONVITE</label>
+            <input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} type="text" required
+              className="w-full bg-black border border-neutral-700 text-white px-3 py-2 mb-4 mt-1 rounded-sm font-mono text-sm"
+              autoComplete="off" data-testid="register-invite-code" />
+          </>}
           <label className="text-xs text-neutral-400 font-mono">E-MAIL</label>
-          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required
+          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required
             className="w-full bg-black border border-neutral-700 text-white px-3 py-2 mb-4 mt-1 rounded-sm font-mono text-sm"
             data-testid="login-email" />
-          <label className="text-xs text-neutral-400 font-mono">SENHA</label>
-          <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required
-            className="w-full bg-black border border-neutral-700 text-white px-3 py-2 mb-6 mt-1 rounded-sm font-mono text-sm"
+          <label className="text-xs text-neutral-400 font-mono">SENHA {registering && "(mínimo 8 caracteres)"}</label>
+          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required minLength={registering ? 8 : undefined}
+            className="w-full bg-black border border-neutral-700 text-white px-3 py-2 mb-4 mt-1 rounded-sm font-mono text-sm"
             data-testid="login-password" />
+          {!registering && <label className="flex items-center gap-2 text-xs text-neutral-400 font-mono mb-5">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="login-remember" />
+            Manter conectado neste dispositivo
+          </label>}
           <button type="submit" disabled={loading}
             className="w-full lokal-btn-primary disabled:opacity-50" data-testid="login-submit">
-            {loading ? "Autenticando..." : "ENTRAR"}
+            {loading ? "Aguarde..." : registering ? "CRIAR CONTA" : "ENTRAR"}
+          </button>
+          <button type="button" className="w-full mt-4 text-xs text-neutral-400 underline" onClick={() => setRegistering((current) => !current)} data-testid="toggle-register">
+            {registering ? "Já tenho uma conta — voltar ao login" : "Cadastrar novo usuário"}
           </button>
         </form>
       </div>

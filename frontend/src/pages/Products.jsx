@@ -86,6 +86,7 @@ export default function Products() {
   const [editing, setEditing] = useState(null);
   const [desmontar, setDesmontar] = useState(null);
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [params] = useSearchParams();
 
   const load = async () => {
@@ -118,7 +119,11 @@ export default function Products() {
   const setSize = (i, patch) => setEditing((e) => { const sz = [...e.sizes]; sz[i] = { ...sz[i], ...patch }; return { ...e, sizes: sz }; });
   const addSize = (size = "") => setEditing((e) => (e.sizes.some((s) => s.size === size && size) ? e : { ...e, sizes: [...e.sizes, { size, stock: 0, stock_min: 0 }] }));
 
-  const filtered = products.filter((p) => !search || (p.name + p.sku + catName(p.category_id) + (p.color || "")).toLowerCase().includes(search.toLowerCase()));
+  const filtered = products.filter((p) => {
+    const matchesCategory = !categoryFilter || p.category_id === categoryFilter || p.subcategory_id === categoryFilter;
+    const matchesSearch = !search || (p.name + p.sku + catName(p.category_id) + catName(p.subcategory_id) + (p.color || "")).toLowerCase().includes(search.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
 
   return (
     <div data-testid="products-page">
@@ -126,8 +131,24 @@ export default function Products() {
         <div><h1>Produtos</h1><p>{products.length} produtos cadastrados · grade militar e vínculos de desmontagem</p></div>
         <button className="lm-btn lm-btn-olive" onClick={() => setEditing({ ...BLANK })} data-testid="btn-new-product"><Plus size={16} />Novo produto</button>
       </div>
-      <div className="relative mb-3 md:w-96"><Search size={15} className="absolute left-3 top-3 text-neutral-400" />
-        <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input pl-9" data-testid="search-products" /></div>
+      <div className="flex flex-col sm:flex-row gap-2 mb-3 sm:max-w-3xl">
+        <div className="relative sm:flex-1"><Search size={15} className="absolute left-3 top-3 text-neutral-400" />
+          <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input pl-9" data-testid="search-products" /></div>
+        <label className="sm:w-64">
+          <span className="sr-only">Filtrar produtos por categoria</span>
+          <select className="lm-input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} data-testid="filter-products-category">
+            <option value="">Todas as categorias</option>
+            {categories.filter((category) => !category.parent_id).map((category) => (
+              <React.Fragment key={category.id}>
+                <option value={category.id}>{category.name}</option>
+                {categories.filter((subCategory) => subCategory.parent_id === category.id).map((subCategory) => (
+                  <option key={subCategory.id} value={subCategory.id}>— {subCategory.name}</option>
+                ))}
+              </React.Fragment>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <div className="lm-table-wrap overflow-x-auto">
         <table className="lm-table">

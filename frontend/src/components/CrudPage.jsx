@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer }) => {
+export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -13,7 +13,8 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
   useEffect(() => { load(); }, [endpoint]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
-    const missing = fields.find((f) => f.required && !editing[f.key]);
+    const isHidden = (field) => typeof field.hidden === "function" ? field.hidden(editing) : !!field.hidden;
+    const missing = fields.find((f) => !isHidden(f) && f.required && !editing[f.key]);
     if (missing) return toast.error(`${missing.label} é obrigatório`);
     const payload = { ...editing };
     fields.forEach((f) => { if (f.type === "number") payload[f.key] = Number(payload[f.key] || 0); });
@@ -27,7 +28,13 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
 
   const remove = async (id) => {
     if (!window.confirm("Excluir registro?")) return;
-    await api.delete(`/${endpoint}/${id}`); toast.success("Removido"); load();
+    try {
+      await api.delete(`/${endpoint}/${id}`);
+      toast.success("Removido");
+      load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível excluir o registro");
+    }
   };
 
   const shown = rows.filter((r) => !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
@@ -56,6 +63,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                 {columns.map((c) => <td key={c.label} className="p-2">{c.render ? c.render(r) : r[c.key]}</td>)}
                 <td className="p-2 whitespace-nowrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={() => setEditing({ ...r })} data-testid={`${testid}-edit-${r.id}`}><Edit size={13} /></button>
+                  {rowActions?.(r, load)}
                   <button className="p-1 hover:bg-red-100 text-red-700" onClick={() => remove(r.id)} data-testid={`${testid}-delete-${r.id}`}><Trash2 size={13} /></button>
                 </td>
               </tr>
@@ -71,18 +79,23 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
           <SheetHeader><SheetTitle className="lokal-stencil">{editing?.id ? "Editar" : "Novo"} · {title}</SheetTitle></SheetHeader>
           {editing && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-              {fields.map((f) => (
+              {fields.filter((f) => !(typeof f.hidden === "function" ? f.hidden(editing) : f.hidden)).map((f) => (
                 <label key={f.key} className={f.wide ? "md:col-span-2" : ""}>
                   <div className="text-[11px] font-mono text-neutral-500 mb-1">{f.label}{f.required ? " *" : ""}</div>
                   {f.type === "select" ? (
-                    <select className="crud-input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} data-testid={`field-${f.key}`}>
+                    <select className="crud-input" value={editing[f.key] ?? ""} onChange={(e) => {
+                      const value = e.target.value;
+                      setEditing({ ...editing, ...(f.onChange ? f.onChange(value, editing) : { [f.key]: value }) });
+                    }} data-testid={`field-${f.key}`}>
                       <option value="">—</option>
-                      {f.options.map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
+                      {(typeof f.options === "function" ? f.options(editing) : f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
                     </select>
                   ) : f.type === "textarea" ? (
                     <textarea className="crud-input" rows={3} value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} data-testid={`field-${f.key}`} />
+                  ) : f.type === "checkbox" ? (
+                    <input className="crud-input" type="checkbox" checked={!!editing[f.key]} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.checked })} data-testid={`field-${f.key}`} />
                   ) : (
-                    <input className="crud-input" type={f.type || "text"} step={f.type === "number" ? "0.01" : undefined}
+                    <input className="crud-input" type={f.type || "text"} step={f.type === "number" ? "0.01" : undefined} readOnly={f.readOnly}
                       value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} data-testid={`field-${f.key}`} />
                   )}
                 </label>

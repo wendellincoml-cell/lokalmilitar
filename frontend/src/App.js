@@ -10,7 +10,7 @@ import Stock from "@/pages/Stock";
 import Orders from "@/pages/Orders";
 import Commissions from "@/pages/Commissions";
 import Settings from "@/pages/Settings";
-import { Customers, Categories, Suppliers, Insumos, Viagens, Manutencao } from "@/pages/SimplePages";
+import { Customers, Categories, Suppliers, Vehicles, Insumos, Viagens, Manutencao } from "@/pages/SimplePages";
 
 function App() {
   return (
@@ -27,6 +27,7 @@ function App() {
             <Route path="/clientes" element={<Customers />} />
             <Route path="/categorias" element={<Categories />} />
             <Route path="/fornecedores" element={<Suppliers />} />
+            <Route path="/veiculos" element={<Vehicles />} />
             <Route path="/comissoes" element={<Commissions />} />
             <Route path="/insumos" element={<Insumos />} />
             <Route path="/viagens" element={<Viagens />} />

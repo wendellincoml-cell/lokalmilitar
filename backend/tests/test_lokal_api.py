@@ -1,4 +1,4 @@
-# LOKAL MILITAR ERP - backend regression tests (auth, users, products, stock, orders, desmontagem, trocas, commissions, crud, settings)
+# LOKAL MILITAR ERP - backend regression tests (open access, users, products, stock, orders, desmontagem, trocas, commissions, crud, settings)
 import os
 import uuid
 import pytest
@@ -14,17 +14,12 @@ def _base():
     return url.rstrip("/")
 
 BASE_URL = _base()
-ADMIN = {"email": "admin@lokalmilitar.com", "password": "lokal123"}
 CREATED = {"products": [], "orders": [], "users": [], "customers": [], "suppliers": [], "categories": [], "expenses": []}
 
 
 @pytest.fixture(scope="session")
 def admin():
     s = requests.Session()
-    r = s.post(f"{BASE_URL}/api/auth/login", json=ADMIN)
-    if r.status_code != 200:
-        pytest.skip("admin login failed")
-    s.headers.update({"Authorization": f"Bearer {r.json()['access_token']}"})
     yield s
     for coll, ids in CREATED.items():
         for i in ids:
@@ -50,26 +45,17 @@ def _stock(admin, pid, size):
     return None
 
 
-# --- Auth ---
-class TestAuth:
-    def test_login_ok(self):
-        r = requests.post(f"{BASE_URL}/api/auth/login", json=ADMIN)
-        assert r.status_code == 200
-        d = r.json()
-        assert d["access_token"] and d["user"]["role"] == "admin"
-        assert "password_hash" not in d["user"]
+# --- Open access ---
+class TestOpenAccess:
+    def test_endpoints_work_without_credentials(self):
+        assert requests.get(f"{BASE_URL}/api/products").status_code == 200
+        response = requests.get(f"{BASE_URL}/api/auth/me")
+        assert response.status_code == 200
+        assert response.json()["id"] == "anonymous"
 
-    def test_login_bad(self):
-        r = requests.post(f"{BASE_URL}/api/auth/login", json={"email": ADMIN["email"], "password": "x"})
-        assert r.status_code == 401
-
-    def test_no_token(self):
-        assert requests.get(f"{BASE_URL}/api/products").status_code == 401
-        assert requests.get(f"{BASE_URL}/api/auth/me").status_code == 401
-
-    def test_me(self, admin):
-        r = admin.get(f"{BASE_URL}/api/auth/me")
-        assert r.status_code == 200 and r.json()["email"] == ADMIN["email"]
+    def test_login_endpoint_is_removed(self):
+        response = requests.post(f"{BASE_URL}/api/auth/login", json={"email": "x@example.com", "password": "x"})
+        assert response.status_code == 404
 
 
 # --- Users / vendedor RBAC ---
@@ -82,16 +68,14 @@ class TestUsers:
         CREATED["users"].append(uid)
         dup = admin.post(f"{BASE_URL}/api/auth/users", json={"email": email, "password": "x", "name": "x"})
         assert dup.status_code == 400
-        lr = requests.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": "vend123"})
-        assert lr.status_code == 200 and lr.json()["user"]["role"] == "vendedor"
-        vh = {"Authorization": f"Bearer {lr.json()['access_token']}"}
-        c = requests.post(f"{BASE_URL}/api/auth/users", headers=vh, json={"email": "test_x@x.com", "password": "x", "name": "x"})
-        assert c.status_code == 403
-        d = requests.delete(f"{BASE_URL}/api/auth/users/{uid}", headers=vh)
-        assert d.status_code == 403
-        # vendor order -> vendor_name assigned
-        o = requests.post(f"{BASE_URL}/api/orders", headers=vh, json={"customer_name": "TEST_C", "items": [], "status": "Orçamento"})
-        assert o.status_code == 200 and o.json()["vendor_id"] == uid
+        c = requests.post(f"{BASE_URL}/api/auth/users", json={"email": "test_x@x.com", "password": "x", "name": "x"})
+        assert c.status_code == 200
+        CREATED["users"].append(c.json()["id"])
+        d = requests.delete(f"{BASE_URL}/api/auth/users/{uid}")
+        assert d.status_code == 200
+        # Orders use a shared anonymous identity.
+        o = requests.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_C", "items": [], "status": "Orçamento"})
+        assert o.status_code == 200 and o.json()["vendor_id"] == "anonymous"
         CREATED["orders"].append(o.json()["id"])
 
 

@@ -1,5 +1,6 @@
 import React from "react";
 import { formatBRL, formatDateShort } from "@/lib/api";
+import BrandMark from "@/components/BrandMark";
 
 const C = { olive: "#4B5320", ink: "#111", khaki: "#C3B091", gold: "#B8860B", line: "#D9D2C3", soft: "#F6F3EC" };
 const TYPE_LABEL = { VENDA: "Pedido de venda", TROCA: "Troca", DEVOLUCAO: "Devolução", ORCAMENTO: "Orçamento" };
@@ -27,7 +28,7 @@ function ItemsTable({ items }) {
       <thead><tr>
         <th style={{ ...th, width: 22 }}>#</th><th style={th}>Descrição do produto</th><th style={th}>Código</th>
         <th style={{ ...th, textAlign: "center" }}>Tam.</th><th style={{ ...th, textAlign: "center" }}>Un.</th>
-        <th style={{ ...th, textAlign: "right" }}>Qtd.</th><th style={{ ...th, textAlign: "right" }}>Valor unit.</th><th style={{ ...th, textAlign: "right" }}>Valor total</th>
+        <th style={{ ...th, textAlign: "right" }}>Qtd.</th>
       </tr></thead>
       <tbody>
         {items.map((it, i) => (
@@ -38,11 +39,9 @@ function ItemsTable({ items }) {
             <td style={{ ...td, textAlign: "center" }}><span style={{ background: "#E8E2D5", borderRadius: 3, padding: "1px 6px", fontWeight: 700 }}>{it.size || "—"}</span></td>
             <td style={{ ...td, textAlign: "center" }}>{unitOf(it.size)}</td>
             <td style={{ ...td, textAlign: "right" }}>{num(it.qty)}</td>
-            <td style={{ ...td, textAlign: "right" }}>{num(it.unit_price)}</td>
-            <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{num(it.subtotal || it.qty * it.unit_price)}</td>
           </tr>
         ))}
-        {items.length === 0 && <tr><td colSpan={8} style={{ ...td, textAlign: "center", color: "#888" }}>Nenhum item</td></tr>}
+        {items.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: "center", color: "#888" }}>Nenhum item</td></tr>}
       </tbody>
     </table>
   );
@@ -83,21 +82,18 @@ function ReturnsSection({ returned, exchanged }) {
   );
 }
 
-export default function PrintOrderA4({ order, settings, customer }) {
+export default function PrintOrderA4({ order, settings, customer, vendor, captureRef }) {
   if (!order) return null;
   const items = order.items || [];
   const returned = order.returned_items || [];
   const exchanged = order.exchanged_items || [];
   const somaQtd = items.reduce((s, i) => s + Number(i.qty || 0), 0);
-  const totalProd = items.reduce((s, i) => s + Number(i.subtotal || i.qty * i.unit_price || 0), 0);
-  const discount = Number(order.discount || 0);
-  const total = Number(order.total ?? totalProd - discount);
 
   return (
-    <div className="print-a4" style={{ color: C.ink, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact", fontFamily: "Arial, Helvetica, sans-serif" }} data-testid="print-a4-layout">
+    <div ref={captureRef} className="print-a4" style={{ color: C.ink, WebkitPrintColorAdjust: "exact", printColorAdjust: "exact", fontFamily: "Arial, Helvetica, sans-serif" }} data-testid="print-a4-layout">
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: 10, borderBottom: `3px solid ${C.olive}` }}>
-        <img src="/logo-lokal.png" alt="Lokal Militar" style={{ height: 52 }} />
+        <BrandMark light />
         <div style={{ textAlign: "right", fontSize: 9.5, lineHeight: 1.5, color: "#333" }}>
           <div style={{ fontWeight: 800, fontSize: 11, color: C.ink }}>{settings?.store_full_name}</div>
           <div>{settings?.address}</div>
@@ -115,8 +111,10 @@ export default function PrintOrderA4({ order, settings, customer }) {
         <div style={{ display: "flex", gap: 18, textAlign: "right" }}>
           <div><div style={{ fontSize: 8.5, color: C.khaki, letterSpacing: 1 }}>DATA</div><div style={{ fontSize: 12, fontWeight: 700 }}>{formatDateShort(order.created_at)}</div></div>
           <div><div style={{ fontSize: 8.5, color: C.khaki, letterSpacing: 1 }}>PREVISTA</div><div style={{ fontSize: 12, fontWeight: 700 }}>{order.expected_date ? formatDateShort(order.expected_date) : "—"}</div></div>
-          <div><div style={{ fontSize: 8.5, color: C.khaki, letterSpacing: 1 }}>STATUS</div>
-            <div style={{ fontSize: 10, fontWeight: 800, background: C.gold, color: C.ink, borderRadius: 3, padding: "2px 8px", marginTop: 2 }}>{(order.status || "").toUpperCase()}</div></div>
+          {["Entregue", "Retirado"].includes(order.status) && (
+            <div><div style={{ fontSize: 8.5, color: C.khaki, letterSpacing: 1 }}>STATUS</div>
+              <div style={{ fontSize: 10, fontWeight: 800, background: C.gold, color: C.ink, borderRadius: 3, padding: "2px 8px", marginTop: 2 }}>{order.status.toUpperCase()}</div></div>
+          )}
         </div>
       </div>
 
@@ -133,7 +131,12 @@ export default function PrintOrderA4({ order, settings, customer }) {
         </Box>
         <Box title="Atendimento">
           <Info label="Vendedor" value={order.vendor_name} strong />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <Info label="Telefone do vendedor" value={vendor?.phone} />
+            <Info label="CPF do vendedor" value={vendor?.cpf} />
+          </div>
           <Info label="Forma de pagamento" value={order.payment} />
+          {order.status === "Entregue" && order.delivery_type === "ENTREGA" && order.vehicle_name && <Info label="Veículo utilizado" value={order.vehicle_name} />}
           {order.original_order_id && <Info label="Referente ao pedido" value={order.original_number ? `#${order.original_number}` : "Vinculado"} />}
           {order.avulsa && <Info label="Tipo" value="Troca/devolução avulsa" />}
         </Box>
@@ -148,12 +151,9 @@ export default function PrintOrderA4({ order, settings, customer }) {
       {/* Totals */}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
         <div style={{ width: 260, border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden", fontSize: 10.5 }}>
-          {[["Nº de itens", items.length], ["Soma das quantidades", num(somaQtd)], ["Total de produtos", formatBRL(totalProd)], ["Desconto", discount ? `− ${formatBRL(discount)}` : formatBRL(0)]].map(([l, v]) => (
+          {[["Nº de itens", items.length], ["Soma das quantidades", num(somaQtd)]].map(([l, v]) => (
             <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderBottom: `1px solid ${C.line}` }}><span style={{ color: "#555" }}>{l}</span><b>{v}</b></div>
           ))}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: C.olive, color: "#fff" }}>
-            <span style={{ fontWeight: 700, letterSpacing: 1, fontSize: 10 }}>TOTAL DO PEDIDO</span><span style={{ fontSize: 16, fontWeight: 800 }}>{formatBRL(total)}</span>
-          </div>
         </div>
       </div>
 
@@ -170,8 +170,14 @@ export default function PrintOrderA4({ order, settings, customer }) {
 
       {/* Signatures */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 50, marginTop: 40, fontSize: 9.5, textAlign: "center", color: "#444" }}>
-        <div style={{ borderTop: `1px solid ${C.ink}`, paddingTop: 4 }}>Assinatura do cliente</div>
-        <div style={{ borderTop: `1px solid ${C.ink}`, paddingTop: 4 }}>Assinatura do vendedor</div>
+        <div>
+          {order.signature && <img src={order.signature} alt="Assinatura do cliente" style={{ display: "block", maxWidth: "100%", height: 52, objectFit: "contain", margin: "0 auto 4px" }} />}
+          <div style={{ borderTop: `1px solid ${C.ink}`, paddingTop: 4 }}>Assinatura do cliente</div>
+        </div>
+        <div>
+          {vendor?.signature && <img src={vendor.signature} alt="Assinatura do vendedor" style={{ display: "block", maxWidth: "100%", height: 52, objectFit: "contain", margin: "0 auto 4px" }} />}
+          <div style={{ borderTop: `1px solid ${C.ink}`, paddingTop: 4 }}>Assinatura do vendedor</div>
+        </div>
       </div>
 
       <div style={{ marginTop: 22, paddingTop: 6, borderTop: `1px solid ${C.line}`, display: "flex", justifyContent: "space-between", fontSize: 8.5, color: "#777" }}>

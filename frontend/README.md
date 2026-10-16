@@ -11,6 +11,38 @@ In the project directory, you can run:
 Runs the app in the development mode.\
 Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
 
+In development, API requests use the `/api` path and are proxied to the backend at
+`http://127.0.0.1:8000`. Set `REACT_APP_BACKEND_PROXY_TARGET` if the backend runs
+at a different address. Restart the frontend dev server after changing its proxy
+configuration.
+
+The **Configurações → Aparência** section lets you customize system and panel
+backgrounds, text, borders, form fields, menus, buttons, highlights, and card
+headers. Changes can be previewed immediately, saved for future sessions, or
+reset to the default palette.
+
+The **Configurações → Personalizar dashboard** section controls dashboard card
+visibility and order and the sales chart type and time range. Dashboard cards
+and charts follow the global system palette; category cards keep their dark
+header, gold icon, rounded border, and light information area. Preferences are
+saved with the system settings.
+
+Public registration requires a one-time invitation created under
+**Configurações → Convites para cadastro** by an administrator. The administrator
+can choose a validity from 1 to 30 days (7 days by default), copy the generated
+link, and revoke unused invitations. New accounts start with a visualizer
+profile; administrators can later grant a seller or administrator profile and
+change a user's login or password. The login's “Manter conectado” option stores
+the session in persistent browser storage; otherwise it is limited to the
+current browser session.
+
+Order stock is posted only by the “Entregar/Retirar” action. Delivery can save
+the client's signature, vehicle, and route; completed orders are available as
+A4 printouts from the stock movement history. The A4 order preview can also be
+downloaded as a JPEG image. Vehicle trips update accumulated kilometers and
+estimate fuel consumption from vehicle data. Supplies keep a remaining quantity
+that can be reduced with “Consumir”.
+
 The page will reload when you make changes.\
 You may also see any lint errors in the console.
 

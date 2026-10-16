@@ -1,9 +1,8 @@
 # Seed TEST_ data for UI testing (run with arg 'clean' to remove)
 import sys, uuid, json, requests
 sys.path.insert(0, "/app/backend/tests")
-from test_lokal_api import BASE_URL, ADMIN
+from test_lokal_api import BASE_URL
 s = requests.Session()
-s.headers["Authorization"] = "Bearer " + s.post(f"{BASE_URL}/api/auth/login", json=ADMIN).json()["access_token"]
 if len(sys.argv) > 1 and sys.argv[1] == "clean":
     for o in s.get(f"{BASE_URL}/api/orders").json():
         if (o.get("customer_name") or "").startswith("TEST_"): s.delete(f"{BASE_URL}/api/orders/{o['id']}")

@@ -1,24 +1,30 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const configuredUrl = process.env.REACT_APP_BACKEND_URL?.trim().replace(/\/+$/, "") || "";
+const pointsToLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configuredUrl);
+const isRemoteBrowser =
+  typeof window !== "undefined" &&
+  !["localhost", "127.0.0.1"].includes(window.location.hostname);
+const BACKEND_URL = pointsToLocalhost && isRemoteBrowser ? "" : configuredUrl;
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("lokal_token");
+  const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 api.interceptors.response.use(
-  (r) => r,
-  (err) => {
-    if (err.response?.status === 401) {
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
       localStorage.removeItem("lokal_token");
+      sessionStorage.removeItem("lokal_token");
       if (window.location.pathname !== "/login") window.location.href = "/login";
     }
-    return Promise.reject(err);
+    return Promise.reject(error);
   }
 );
 
