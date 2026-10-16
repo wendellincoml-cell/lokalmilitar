@@ -3,7 +3,7 @@ import { Outlet, NavLink, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   LayoutDashboard, Package, Boxes, ShoppingCart, Repeat, Users, Tag, Truck,
-  Wrench, Fuel, DollarSign, Settings, LogOut, Shield, Menu, X
+  Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X
 } from "lucide-react";
 
 const items = [
@@ -41,12 +41,11 @@ export default function AppLayout() {
       </div>
 
       <aside className={`lokal-sidebar no-print ${open ? "block" : "hidden"} md:block fixed md:static z-30 top-12 md:top-0 left-0 w-64 md:min-h-screen`}>
-        <div className="hidden md:flex items-center gap-2 px-4 py-5 border-b border-neutral-800">
-          <Shield size={22} color="#B8860B" />
-          <div>
-            <div className="lokal-stencil text-sm">LOKAL MILITAR</div>
-            <div className="text-[10px] font-mono text-neutral-500">COMANDO · ERP</div>
+        <div className="hidden md:block px-4 py-4 border-b border-neutral-800" data-testid="sidebar-logo">
+          <div className="bg-[#FBF9F4] rounded-md px-3 py-2 flex items-center justify-center">
+            <img src="/logo-lokal.png" alt="Lokal Militar" className="h-12 w-auto object-contain" />
           </div>
+          <div className="text-[10px] font-mono text-neutral-500 text-center mt-2 tracking-widest">FARDAS E ARTIGOS MILITARES</div>
         </div>
         <nav className="py-2">
           {items.map((it) => (

@@ -13,9 +13,6 @@ export function Customers() {
         { key: "name", label: "Nome / Loja", required: true, wide: true },
         { key: "cpf", label: "CPF / CNPJ" },
         { key: "phone", label: "Telefone" },
-        { key: "patente_om", label: "Patente / OM" },
-        { key: "nome_guerra", label: "Nome de Guerra" },
-        { key: "sizes_fit", label: "Medidas / Tamanhos usuais" },
         { key: "address", label: "Endereço", wide: true },
       ]}
       columns={[

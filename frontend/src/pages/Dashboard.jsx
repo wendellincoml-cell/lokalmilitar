@@ -11,7 +11,7 @@ const CategoryCard = ({ cat, onClick }) => {
   const Icon = ICONS[cat.icon] || Package;
   return (
     <button onClick={onClick} className="lokal-tile text-left overflow-hidden" data-testid={`card-cat-${cat.name}`}>
-      <div className="lm-card-head"><span className="text-[15px]">{cat.name}</span><Icon size={18} color="#B8860B" /></div>
+      <div className="lm-card-head"><span className="text-[15px]">{cat.name}</span><Icon size={18} color="var(--gold)" /></div>
       <div className="px-4 py-3">
         <div className="flex items-baseline gap-2"><span className="font-head text-3xl font-bold">{Math.round(cat.qty)}</span><span className="text-sm text-neutral-600">{UNIT[cat.name] || "unid"}</span></div>
         <div className="text-sm text-neutral-600">Valor: <b className="text-neutral-900">{formatBRL(cat.value)}</b></div>
@@ -55,12 +55,12 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Kpi icon={ClipboardList} color="#4B5320" label="Pedidos hoje" value={data.orders_today} sub={formatBRL(data.orders_today_total)} onClick={() => nav("/pedidos")} testid="kpi-orders-today" />
-        <Kpi icon={Clock} color="#B8860B" label="Pedidos pendentes" value={data.pending} sub="Orçamento / Aprovado / Separado" onClick={() => nav("/pedidos")} testid="kpi-pending" />
+        <Kpi icon={ClipboardList} color="var(--olive)" label="Pedidos hoje" value={data.orders_today} sub={formatBRL(data.orders_today_total)} onClick={() => nav("/pedidos")} testid="kpi-orders-today" />
+        <Kpi icon={Clock} color="var(--gold)" label="Pedidos pendentes" value={data.pending} sub="Orçamento / Aprovado / Separado" onClick={() => nav("/pedidos")} testid="kpi-pending" />
         <Kpi icon={Users} color="#111" label="Clientes" value={data.customers} onClick={() => nav("/clientes")} testid="kpi-customers" />
-        <Kpi icon={CircleDollarSign} color="#B8860B" label="Comissão do mês" value={formatBRL(data.commission_month)} onClick={() => nav("/comissoes")} testid="kpi-commission" />
+        <Kpi icon={CircleDollarSign} color="var(--gold)" label="Comissão do mês" value={formatBRL(data.commission_month)} onClick={() => nav("/comissoes")} testid="kpi-commission" />
         <Kpi icon={AlertTriangle} color="#D93636" label="Estoque baixo" value={data.low_stock.length} sub="tamanhos no mínimo" onClick={() => nav("/estoque?low=1")} testid="kpi-low-stock" />
-        <Kpi icon={Scissors} color="#4B5320" label="Gastos insumos (mês)" value={formatBRL(data.insumos_month)} onClick={() => nav("/insumos")} testid="kpi-insumos" />
+        <Kpi icon={Scissors} color="var(--olive)" label="Gastos insumos (mês)" value={formatBRL(data.insumos_month)} onClick={() => nav("/insumos")} testid="kpi-insumos" />
         <Kpi icon={Car} color="#111" label="Manutenção veículo" value={formatBRL(data.manut_month)} sub={data.manut_alerts ? `${data.manut_alerts} revisão(ões) próxima(s)` : "Sem alertas"} onClick={() => nav("/manutencao")} testid="kpi-manutencao" />
       </div>
 
@@ -80,14 +80,14 @@ export default function Dashboard() {
                 <CartesianGrid stroke="#e6dfcf" strokeDasharray="3 3" />
                 <XAxis dataKey="label" style={{ fontSize: 12 }} /><YAxis style={{ fontSize: 12 }} />
                 <Tooltip formatter={(v) => formatBRL(v)} />
-                <Line type="monotone" dataKey="vendas" stroke="#4B5320" strokeWidth={2.5} dot={{ fill: "#B8860B" }} />
+                <Line type="monotone" dataKey="vendas" stroke="var(--olive)" strokeWidth={2.5} dot={{ fill: "var(--gold)" }} />
               </LineChart>
             ) : (
               <BarChart data={chartData}>
                 <CartesianGrid stroke="#e6dfcf" strokeDasharray="3 3" />
                 <XAxis dataKey="label" style={{ fontSize: 12 }} /><YAxis style={{ fontSize: 12 }} />
                 <Tooltip formatter={(v) => formatBRL(v)} />
-                <Bar dataKey="vendas" fill="#4B5320" />
+                <Bar dataKey="vendas" fill="var(--olive)" />
               </BarChart>
             )}
           </ResponsiveContainer>

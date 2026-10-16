@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 
@@ -25,13 +25,54 @@ const Swatches = ({ colors, current, onPick, prefix }) => (
     ))}
   </div>
 );
+const HEAD_FONTS = ["Oswald", "Bebas Neue", "Barlow Condensed", "Teko", "Black Ops One", "Saira Stencil One", "Rajdhani", "Roboto Condensed", "Archivo"];
+const BODY_FONTS = ["Barlow", "IBM Plex Sans", "Source Sans 3", "Nunito Sans", "Roboto Condensed", "Archivo", "Rajdhani"];
+const THEME_COLORS = [
+  ["title_color", "Cor dos títulos"], ["primary_color", "Cor principal (botões, destaques)"],
+  ["accent_color", "Cor de detalhe (dourado)"], ["sidebar_color", "Cor do menu lateral"],
+];
+
+function ThemeSection({ theme, applyTheme, onSave }) {
+  return (
+    <section className="lokal-panel p-4" data-testid="theme-section">
+      <h2 className="lokal-stencil text-sm mb-1">Aparência — fontes e cores</h2>
+      <p className="text-xs text-neutral-500 mb-3">Vale para todas as abas do sistema. As mudanças aparecem na hora; clique em salvar para manter.</p>
+      <div className="grid md:grid-cols-2 gap-3">
+        <label><div className="text-[11px] font-head text-neutral-600 mb-1">Fonte dos títulos</div>
+          <select className="lm-input" value={theme.font_head} onChange={(e) => applyTheme({ font_head: e.target.value })} data-testid="theme-font-head">
+            {HEAD_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+          </select></label>
+        <label><div className="text-[11px] font-head text-neutral-600 mb-1">Fonte dos textos</div>
+          <select className="lm-input" value={theme.font_body} onChange={(e) => applyTheme({ font_body: e.target.value })} data-testid="theme-font-body">
+            {BODY_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+          </select></label>
+        {THEME_COLORS.map(([k, l]) => (
+          <label key={k} className="flex items-center gap-3">
+            <input type="color" value={theme[k]} onChange={(e) => applyTheme({ [k]: e.target.value })} className="w-12 h-10 border rounded cursor-pointer" data-testid={`theme-${k}`} />
+            <span className="text-sm">{l} <span className="font-mono text-xs text-neutral-500">{theme[k]}</span></span>
+          </label>
+        ))}
+      </div>
+      <div className="lm-card p-3 mt-3" data-testid="theme-preview">
+        <h3 className="text-xl font-bold" style={{ color: "var(--title-color)" }}>Prévia do título</h3>
+        <p className="text-sm">Texto de exemplo com a fonte escolhida para o corpo do sistema.</p>
+        <button className="lm-btn lm-btn-olive mt-2">Botão principal</button>
+      </div>
+      <div className="flex gap-2 mt-3">
+        <button className="lm-btn lm-btn-olive" onClick={() => onSave(theme)} data-testid="theme-save">Salvar aparência</button>
+        <button className="lm-btn lm-btn-outline" onClick={() => { applyTheme(DEFAULT_THEME); onSave(DEFAULT_THEME); }} data-testid="theme-reset">Restaurar padrão</button>
+      </div>
+    </section>
+  );
+}
+
 const STORE_FIELDS = [
   ["store_full_name", "Razão social"], ["cnpj", "CNPJ"], ["address", "Endereço"], ["phone", "Telefone"],
   ["instagram", "Instagram"], ["pix_key", "Chave PIX"], ["print_footer_text", "Rodapé da impressão"],
 ];
 
 export default function Settings() {
-  const { user, bg, applyBg, panel, applyPanel } = useAuth();
+  const { user, bg, applyBg, panel, applyPanel, theme, applyTheme } = useAuth();
   const [s, setS] = useState(null);
   const [users, setUsers] = useState([]);
   const [nu, setNu] = useState({ name: "", email: "", password: "", role: "vendedor" });
@@ -41,6 +82,7 @@ export default function Settings() {
 
   const pickColor = async (c) => { applyBg(c); await api.put("/settings", { background_color: c }); toast.success("Fundo atualizado"); };
   const pickPanel = async (c) => { applyPanel(c); await api.put("/settings", { panel_color: c }); toast.success("Cor das janelas atualizada"); };
+  const saveTheme = async (t) => { await api.put("/settings", { theme: t }); toast.success("Aparência salva"); };
   const saveStore = async () => { await api.put("/settings", s); toast.success("Dados salvos"); };
   const addUser = async () => {
     try { await api.post("/auth/users", nu); toast.success("Usuário criado"); setNu({ name: "", email: "", password: "", role: "vendedor" }); loadUsers(); }
@@ -53,7 +95,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-5" data-testid="settings-page">
-      <h1 className="lokal-stencil text-2xl">Configurações</h1>
+      <div className="lm-page-head"><h1>Configurações</h1><p>Aparência, dados da empresa e usuários</p></div>
 
       <section className="lokal-panel p-4">
         <h2 className="lokal-stencil text-sm mb-3">Cor de fundo do sistema</h2>
@@ -65,6 +107,8 @@ export default function Settings() {
         <p className="text-xs text-neutral-500 mb-3">Aplica-se aos formulários laterais, janelas de entrada/saída, desmontagem e pré-visualização.</p>
         <Swatches colors={PANEL_COLORS} current={panel} onPick={pickPanel} prefix="panel-color" />
       </section>
+
+      <ThemeSection theme={theme} applyTheme={applyTheme} onSave={saveTheme} />
 
       <section className="lokal-panel p-4">
         <h2 className="lokal-stencil text-sm mb-3">Dados da empresa (impressão)</h2>

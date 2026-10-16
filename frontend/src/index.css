@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow:wght@400;500;600;700&family=Saira+Stencil+One&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow:wght@400;500;600;700&family=Saira+Stencil+One&family=IBM+Plex+Mono:wght@400;500&family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700&family=Teko:wght@400;500;600;700&family=Black+Ops+One&family=Rajdhani:wght@500;600;700&family=Roboto+Condensed:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&family=Nunito+Sans:wght@400;600;700&family=Archivo:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -15,6 +15,10 @@
   --line: #E2DCCF;
   --chip: #E8E2D5;
   --panel-bg: #FBF9F4;
+  --font-head: var(--font-head);
+  --font-body: 'Barlow', sans-serif;
+  --title-color: #111111;
+  --sidebar-bg: #111111;
   --panel-fg: #111111;
 
   --background: 40 30% 93%;
@@ -44,24 +48,24 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  font-family: 'Barlow', system-ui, sans-serif;
+  font-family: var(--font-body);
   background-color: var(--system-bg-color);
   color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased;
 }
 
 h1, h2, h3, .font-head, .lokal-stencil {
-  font-family: 'Oswald', sans-serif;
+  font-family: var(--font-head);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 .lokal-stencil { font-weight: 700; }
 .font-mono { font-family: 'IBM Plex Mono', monospace; }
-.font-stencil { font-family: 'Saira Stencil One', 'Oswald', sans-serif; }
+.font-stencil { font-family: 'Saira Stencil One', var(--font-head); }
 
 /* Page header with olive underline */
 .lm-page-head { border-bottom: 2px solid var(--olive); padding-bottom: 10px; margin-bottom: 18px; }
-.lm-page-head h1 { font-size: 2rem; font-weight: 700; line-height: 1; }
+.lm-page-head h1, main h1 { font-size: 2rem; font-weight: 700; line-height: 1; color: var(--title-color); }
 .lm-page-head p { font-size: 0.85rem; color: #555; margin-top: 4px; text-transform: none; }
 
 /* Cards */
@@ -74,7 +78,7 @@ h1, h2, h3, .font-head, .lokal-stencil {
 .lm-card-head {
   background: linear-gradient(90deg, #111 0%, #2a2e14 100%);
   color: #E9DFC6;
-  font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: .04em;
+  font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em;
   border-radius: 6px 6px 0 0;
   padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;
 }
@@ -95,7 +99,7 @@ h1, h2, h3, .font-head, .lokal-stencil {
 /* Buttons */
 .lm-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: .04em; font-weight: 500;
+  font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em; font-weight: 500;
   font-size: 0.85rem; padding: 0.55rem 1rem; border-radius: 4px; border: 1px solid transparent;
   transition: background-color 140ms ease, opacity 140ms ease, transform 140ms ease;
 }
@@ -104,7 +108,7 @@ h1, h2, h3, .font-head, .lokal-stencil {
 .lokal-btn-primary, .lm-btn-olive { background: var(--olive); color: #fff; }
 .lokal-btn-primary {
   display: inline-flex; align-items: center; gap: 8px; justify-content: center;
-  font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: .04em; font-weight: 500;
+  font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em; font-weight: 500;
   font-size: 0.85rem; padding: 0.55rem 1rem; border-radius: 4px;
   transition: background-color 140ms ease;
 }
@@ -120,14 +124,14 @@ h1, h2, h3, .font-head, .lokal-stencil {
 
 /* Segmented tabs */
 .lm-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--chip); }
-.lm-seg button { font-family: 'Oswald', sans-serif; text-transform: uppercase; font-size: .85rem; padding: .5rem .9rem; transition: background-color 120ms ease; }
+.lm-seg button { font-family: var(--font-head); text-transform: uppercase; font-size: .85rem; padding: .5rem .9rem; transition: background-color 120ms ease; }
 .lm-seg button.on { background: var(--olive); color: #fff; }
 .lm-seg button:not(.on):hover { background: #ddd5c4; }
 
 /* Inputs */
 .lm-input, .input, .crud-input {
   width: 100%; background: #fff; border: 1px solid #d6cfbf; border-radius: 4px;
-  padding: 8px 10px; font-size: 14px; font-family: 'Barlow', sans-serif;
+  padding: 8px 10px; font-size: 14px; font-family: var(--font-body);
   transition: border-color 120ms ease;
 }
 .lm-input:focus, .input:focus, .crud-input:focus { border-color: var(--olive); outline: none; }
@@ -137,32 +141,41 @@ h1, h2, h3, .font-head, .lokal-stencil {
 .lm-table, .table-mono { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .lm-table thead tr, .table-mono thead tr { background: #111 !important; }
 .lm-table th, .table-mono th {
-  color: #D9C9A0 !important; font-family: 'Oswald', sans-serif; text-transform: uppercase;
+  color: #D9C9A0 !important; font-family: var(--font-head); text-transform: uppercase;
   font-weight: 500; font-size: 0.78rem; letter-spacing: .05em; padding: 10px 12px !important; text-align: left;
 }
 .lm-table td, .table-mono td { padding: 10px 12px !important; border-top: 1px solid var(--line); }
 .lm-table tbody tr, .table-mono tbody tr { transition: background-color 120ms ease; }
 .lm-table tbody tr:hover, .table-mono tbody tr:hover { background: #F4EFE3; }
 
-.chip { display: inline-block; background: var(--chip); border-radius: 3px; padding: 2px 7px; font-size: 0.78rem; font-weight: 600; margin: 2px; font-family: 'Barlow', sans-serif; }
+.chip { display: inline-block; background: var(--chip); border-radius: 3px; padding: 2px 7px; font-size: 0.78rem; font-weight: 600; margin: 2px; font-family: var(--font-body); }
 .chip-low { background: #F8D7D7; color: #B42318; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: .72rem; font-weight: 600; font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: .03em; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: .72rem; font-weight: 600; font-family: var(--font-head); text-transform: uppercase; letter-spacing: .03em; }
 
 /* Sidebar */
-.lokal-sidebar { background: #111; color: #e6e6e6; border-right: 1px solid #222; }
-.lokal-sidebar a { border-left: 3px solid transparent; font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: .04em; font-weight: 400; transition: background-color 120ms ease, border-color 120ms ease; }
+.lokal-sidebar { background: var(--sidebar-bg); color: #e6e6e6; border-right: 1px solid #222; }
+.lokal-sidebar a { border-left: 3px solid transparent; font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em; font-weight: 400; transition: background-color 120ms ease, border-color 120ms ease; }
 .lokal-sidebar a:hover { background: #1c1c1c; border-left-color: var(--khaki); }
 .lokal-sidebar a.active { background: var(--olive); color: #fff; border-left-color: var(--gold); }
 
 /* Print */
 @media print {
+  @page { size: A4; margin: 0; }
   body * { visibility: hidden; }
   #print-area, #print-area * { visibility: visible; }
   #print-area { position: absolute !important; left: 0 !important; top: 0 !important; width: 100%; background:#fff; }
-  @page { margin: 0; }
   .no-print { display: none !important; }
 }
-.print-a4 { width: 210mm; min-height: 297mm; padding: 12mm; background: #fff; color: #000; font-family: Arial, sans-serif; font-size: 11px; }
+.print-a4 {
+  width: 210mm;
+  min-height: 297mm;
+  box-sizing: border-box;
+  padding: 12mm;
+  background: #fff;
+  color: #000;
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+}
 .print-80 { width: 80mm; padding: 4mm; background: #fff; color: #000; font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
 .print-a4 table { width: 100%; border-collapse: collapse; }
 .print-a4 th, .print-a4 td { border: 1px solid #000; padding: 4px 6px; }
