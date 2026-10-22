@@ -84,17 +84,32 @@ export default function Commissions() {
   const [rows, setRows] = useState([]);
   const [orders, setOrders] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [stockMovements, setStockMovements] = useState([]);
   const [vendor, setVendor] = useState("ALL");
   const [period, setPeriod] = useState("mes");
   const [paidF, setPaidF] = useState("all");
 
   const load = async () => {
-    const [c, o, v] = await Promise.all([api.get("/commissions"), api.get("/orders"), api.get("/vendors")]);
-    setRows(c.data); setOrders(o.data); setVendors(v.data);
+    const [c, o, v, movements] = await Promise.all([
+      api.get("/commissions"), api.get("/orders"), api.get("/vendors"), api.get("/stock_movements"),
+    ]);
+    setRows(c.data); setOrders(o.data); setVendors(v.data); setStockMovements(movements.data);
   };
   useEffect(() => { load(); }, []);
 
   const orderById = useMemo(() => Object.fromEntries(orders.map((o) => [o.id, o])), [orders]);
+  const reportStockMovements = useMemo(() => {
+    const inboundKinds = new Set(["ENTRADA", "DESMONTAGEM_ENTRADA", "DESMONTAGEM_INV"]);
+    return stockMovements.flatMap((movement) => {
+      const order = orderById[movement.order_id];
+      if (!order || !inPeriod(movement.created_at, period) || (vendor !== "ALL" && order.vendor_name !== vendor)) return [];
+      return [{
+        ...movement,
+        order,
+        direction: inboundKinds.has(movement.kind) ? "ENTRADA" : "SAÍDA",
+      }];
+    });
+  }, [stockMovements, orderById, period, vendor]);
   const shown = rows.filter((r) => (vendor === "ALL" || r.vendor_name === vendor) && inPeriod(r.created_at, period)
     && (paidF === "all" || (paidF === "paid" ? r.paid : !r.paid)));
   const pending = shown.filter((r) => !r.paid);
@@ -106,18 +121,44 @@ export default function Commissions() {
     toast.success("Comissões marcadas como pagas"); load();
   };
   const tableRows = shown.map((r) => [r.order_number, formatDateShort(r.created_at), r.vendor_name || "", orderById[r.order_id]?.customer_name || "", orderById[r.order_id]?.status || "", r.items_count, r.amount, r.paid ? "PAGA" : "PENDENTE"]);
+  const movementRows = reportStockMovements.map((movement) => [
+    movement.order.number,
+    formatDateShort(movement.created_at),
+    movement.order.vendor_name || "",
+    movement.order.customer_name || "",
+    movement.product_name || "",
+    movement.size || "-",
+    movement.direction,
+    movement.qty,
+    movement.kind,
+    movement.reason || "",
+  ]);
   const exportExcel = () => {
-    const csv = [["Pedido", "Data", "Vendedor", "Cliente", "Status", "Itens", "Comissão", "Situação"], ...tableRows]
+    const csv = [
+      ["Comissões"],
+      ["Pedido", "Data", "Vendedor", "Cliente", "Status", "Itens", "Comissão", "Situação"],
+      ...tableRows,
+      [],
+      ["Movimentações de estoque vinculadas a pedidos (não alteram o valor da comissão)"],
+      ["Pedido", "Data", "Vendedor", "Cliente", "Produto", "Tamanho", "Movimento", "Quantidade", "Tipo", "Motivo"],
+      ...movementRows,
+    ]
       .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\n");
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv" })); a.download = "comissoes.csv"; a.click();
   };
   const printReport = () => {
     const w = window.open("", "_blank");
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[character]);
     w.document.write(`<html><head><title>Comissões</title><style>body{font-family:Arial;padding:20px}h1{color:#4B5320;font-size:18px}table{width:100%;border-collapse:collapse}th{background:#111;color:#D9C9A0}th,td{border:1px solid #444;padding:4px;font-size:11px;text-align:left}</style></head><body>
       <h1>LOKAL MILITAR — Relatório de Comissões</h1><div style="font-size:12px">Vendedor: ${vendor === "ALL" ? "Todos" : vendor} · Período: ${PERIOD_LABEL[period]}</div>
       <table><thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Status</th><th>Itens</th><th>Comissão</th><th>Situação</th></tr></thead>
-      <tbody>${tableRows.map((r) => `<tr>${r.map((v, i) => `<td>${i === 6 ? formatBRL(v) : v}</td>`).join("")}</tr>`).join("")}</tbody></table>
+      <tbody>${tableRows.map((r) => `<tr>${r.map((v, i) => `<td>${escapeHtml(i === 6 ? formatBRL(v) : v)}</td>`).join("")}</tr>`).join("")}</tbody></table>
       <h3 style="text-align:right">Itens: ${items} · Total: ${formatBRL(total)} · Pendente: ${formatBRL(pending.reduce((s, r) => s + r.amount, 0))}</h3>
+      <h2>Movimentações de estoque vinculadas a pedidos (não alteram o valor da comissão)</h2>
+      <table><thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Produto</th><th>Tamanho</th><th>Movimento</th><th>Quantidade</th><th>Tipo</th><th>Motivo</th></tr></thead>
+      <tbody>${movementRows.map((r) => `<tr>${r.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>
       <script>window.onload=()=>window.print()</script></body></html>`);
     w.document.close();
   };
@@ -172,6 +213,37 @@ export default function Commissions() {
           </tbody>
         </table>
       </div>
+
+      <section className="mt-6 space-y-2" data-testid="commission-stock-movements">
+        <div>
+          <h2 className="font-head text-lg font-semibold">Movimentações de estoque vinculadas a pedidos</h2>
+          <p className="text-xs text-neutral-500">Entradas e saídas de produtos, inclusive trocas e devoluções. Estes registros não alteram o cálculo nem o pagamento da comissão.</p>
+        </div>
+        <div className="lm-table-wrap overflow-x-auto">
+          <table className="lm-table">
+            <thead><tr><th>Pedido</th><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Produto</th><th>Tamanho</th><th>Movimento</th><th>Qtd.</th><th>Tipo</th><th>Motivo</th></tr></thead>
+            <tbody>
+              {reportStockMovements.map((movement) => (
+                <tr key={movement.id}>
+                  <td className="font-head font-bold">#{movement.order.number}</td>
+                  <td>{formatDateShort(movement.created_at)}</td>
+                  <td>{movement.order.vendor_name}</td>
+                  <td>{movement.order.customer_name}</td>
+                  <td>{movement.product_name}</td>
+                  <td>{movement.size || "-"}</td>
+                  <td>{movement.direction}</td>
+                  <td>{movement.qty}</td>
+                  <td>{movement.kind}</td>
+                  <td>{movement.reason}</td>
+                </tr>
+              ))}
+              {reportStockMovements.length === 0 && (
+                <tr><td colSpan={10} className="text-center text-neutral-600 py-6">Nenhuma movimentação de estoque vinculada a pedido neste período.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
