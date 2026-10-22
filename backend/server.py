@@ -31,6 +31,9 @@ app = FastAPI(title="LOKAL MILITAR API")
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
+def public_access_enabled() -> bool:
+    return os.environ.get("PUBLIC_ACCESS_MODE", "").strip().lower() == "true"
+
 # ---------- Helpers ----------
 def new_id() -> str:
     return str(uuid.uuid4())
@@ -61,6 +64,13 @@ async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
     if not creds:
+        if public_access_enabled():
+            return {
+                "id": "public-access",
+                "email": "",
+                "name": "Acesso público",
+                "role": "admin",
+            }
         raise HTTPException(401, "Not authenticated")
     try:
         payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALG])
@@ -447,6 +457,10 @@ def make_crud(coll_name: str, Model):
     return router
 
 # ---------- Auth routes ----------
+@api.get("/auth/mode")
+async def auth_mode():
+    return {"public_access": public_access_enabled()}
+
 @api.post("/auth/login")
 async def login(payload: LoginIn):
     user = await db.users.find_one({"email": payload.email.lower()})

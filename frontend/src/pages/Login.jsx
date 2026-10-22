@@ -6,7 +6,7 @@ import { Shield } from "lucide-react";
 import { api } from "@/lib/api";
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, login, publicAccess, enterPublicAccess } = useAuth();
   const nav = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [email, setEmail] = useState("");
@@ -66,6 +66,9 @@ export default function Login() {
           <div className="mb-8">
             <div className="lokal-stencil text-2xl text-white">{registering ? "NOVO CADASTRO" : "COMANDO · ACESSO"}</div>
             <div className="font-mono text-xs text-neutral-500 mt-1">{registering ? "O cadastro exige convite e libera inicialmente apenas visualização" : "Entrar no painel operacional"}</div>
+            {!registering && publicAccess && <div className="mt-3 text-xs text-amber-400" role="alert">
+              Modo público ativo: qualquer visitante pode consultar e alterar os dados do sistema.
+            </div>}
           </div>
           {registering && <>
             <label className="text-xs text-neutral-400 font-mono">NOME</label>
@@ -93,6 +96,10 @@ export default function Login() {
             className="w-full lokal-btn-primary disabled:opacity-50" data-testid="login-submit">
             {loading ? "Aguarde..." : registering ? "CRIAR CONTA" : "ENTRAR"}
           </button>
+          {!registering && publicAccess && <button type="button" className="w-full mt-3 text-xs text-amber-400 underline"
+            onClick={() => { enterPublicAccess(); nav("/"); }} data-testid="enter-public-access">
+            ACESSAR SEM LOGIN
+          </button>}
           <button type="button" className="w-full mt-4 text-xs text-neutral-400 underline" onClick={() => setRegistering((current) => !current)} data-testid="toggle-register">
             {registering ? "Já tenho uma conta — voltar ao login" : "Cadastrar novo usuário"}
           </button>

@@ -36,6 +36,10 @@ Se o administrador existente não conseguir entrar:
 2. Após o deploy, abra `/docs` da API e execute `POST /api/auth/reset-admin-password`, enviando `X-Admin-Reset-Token` e o e-mail exato da conta `admin`, além de uma nova senha com pelo menos 12 caracteres.
 3. Após sucesso, remova `ADMIN_PASSWORD_RESET_TOKEN` do Render e faça um novo deploy. O reset só pode ser concluído uma vez por banco; não reutilize a senha antiga.
 
+### Acesso público temporário
+
+Para permitir acesso sem login, configure `PUBLIC_ACCESS_MODE=true` nas variáveis do serviço da API no Render e publique uma nova versão do frontend. A tela de login continuará disponível e mostrará **Acessar sem login**; chamadas à API sem autenticação receberão permissões administrativas enquanto o modo estiver ativo. Isso expõe todos os dados e permite alterações por qualquer pessoa, inclusive criação e administração de usuários. Use apenas como medida temporária. Para restaurar a autenticação, remova `PUBLIC_ACCESS_MODE` ou defina-o como `false` e faça novo deploy do backend; os usuários e dados existentes serão preservados.
+
 ### 3. Publicar o frontend na Vercel
 
 1. Importe este repositório na Vercel e defina **Root Directory** como `frontend`.

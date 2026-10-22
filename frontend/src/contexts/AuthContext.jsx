@@ -34,6 +34,7 @@ const readableTextColor = (hex) => {
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(undefined);
+  const [publicAccess, setPublicAccess] = useState(false);
   const [bg, setBg] = useState(localStorage.getItem("system_background_color") || "#F5F0E6");
   const [panel, setPanel] = useState(localStorage.getItem("system_panel_color") || "#FBF9F4");
   const [theme, setTheme] = useState(readTheme);
@@ -94,30 +95,62 @@ export function AuthProvider({ children }) {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
-    if (!token) {
-      setUser(null);
-      return;
-    }
-    api.get("/auth/me")
-      .then((r) => setUser(r.data))
-      .catch(() => {
-        setUser(null);
-        localStorage.removeItem("lokal_token");
-        sessionStorage.removeItem("lokal_token");
-      });
+    let cancelled = false;
+    const initialize = async () => {
+      const modeResponse = await api.get("/auth/mode").catch(() => null);
+      const isPublic = Boolean(modeResponse?.data?.public_access);
+      if (cancelled) return;
+      setPublicAccess(isPublic);
+      if (!isPublic) sessionStorage.removeItem("lokal_public_access");
+
+      const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
+      if (!token) {
+        const publicSession = isPublic && sessionStorage.getItem("lokal_public_access") === "true";
+        setUser(publicSession ? {
+          id: "public-access",
+          email: "",
+          name: "Acesso público",
+          role: "admin",
+        } : null);
+        return;
+      }
+      try {
+        const response = await api.get("/auth/me");
+        if (!cancelled) setUser(response.data);
+      } catch {
+        if (!cancelled) {
+          setUser(null);
+          localStorage.removeItem("lokal_token");
+          sessionStorage.removeItem("lokal_token");
+        }
+      }
+      if (cancelled) return;
+      api.get("/settings").then((r) => {
+        if (r.data.background_color) applyBg(r.data.background_color);
+        if (r.data.panel_color) applyPanel(r.data.panel_color);
+        if (r.data.theme) applyTheme(r.data.theme);
+        if (r.data.dashboard_preferences) applyDashboardPreferences(r.data.dashboard_preferences);
+      }).catch(() => {});
+    };
+    initialize();
+    return () => { cancelled = true; };
+  }, [applyDashboardPreferences]);
+
+  useEffect(() => {
+    if (!user || user.id !== "public-access") return;
     api.get("/settings").then((r) => {
       if (r.data.background_color) applyBg(r.data.background_color);
       if (r.data.panel_color) applyPanel(r.data.panel_color);
       if (r.data.theme) applyTheme(r.data.theme);
       if (r.data.dashboard_preferences) applyDashboardPreferences(r.data.dashboard_preferences);
     }).catch(() => {});
-  }, [applyDashboardPreferences]);
+  }, [user, applyDashboardPreferences]);
 
   const login = async (email, password, remember = true) => {
     const { data } = await api.post("/auth/login", { email, password });
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
+    sessionStorage.removeItem("lokal_public_access");
     (remember ? localStorage : sessionStorage).setItem("lokal_token", data.access_token);
     setUser(data.user);
     return data.user;
@@ -126,13 +159,25 @@ export function AuthProvider({ children }) {
   const logout = () => {
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
+    sessionStorage.removeItem("lokal_public_access");
     setUser(null);
     window.location.href = "/login";
   };
 
+  const enterPublicAccess = () => {
+    if (!publicAccess) return;
+    sessionStorage.setItem("lokal_public_access", "true");
+    setUser({
+      id: "public-access",
+      email: "",
+      name: "Acesso público",
+      role: "admin",
+    });
+  };
+
   return (
     <AuthCtx.Provider value={{
-      user, login, logout, bg, applyBg, panel, applyPanel, theme, applyTheme,
+      user, login, logout, publicAccess, enterPublicAccess, bg, applyBg, panel, applyPanel, theme, applyTheme,
       dashboardPreferences, applyDashboardPreferences,
     }}>
       {children}
