@@ -134,6 +134,37 @@ class TestOrders:
         coms = [c for c in admin.get(f"{BASE_URL}/api/commissions").json() if c["order_id"] == o["id"]]
         assert len(coms) == 1 and coms[0]["amount"] == 2
 
+    def test_retirada_lanca_estoque_uma_unica_vez(self, admin):
+        p = _prod(admin, "TEST_Bota", [{"size": "42", "stock": 5}])
+        o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
+                                                        "items": [{"product_id": p["id"], "name": p["name"], "size": "42", "qty": 2, "unit_price": 10}]}).json()
+        CREATED["orders"].append(o["id"])
+
+        response = admin.post(f"{BASE_URL}/api/orders/{o['id']}/fulfill", json={"delivery_type": "RETIRADA"})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "Retirado"
+        assert _stock(admin, p["id"], "42") == 3
+        movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+        assert len(movements) == 1 and movements[0]["kind"] == "SAIDA"
+
+        repeated = admin.post(f"{BASE_URL}/api/orders/{o['id']}/fulfill", json={"delivery_type": "RETIRADA"})
+        assert repeated.status_code == 400
+        assert _stock(admin, p["id"], "42") == 3
+
+    def test_admin_altera_status_e_sincroniza_estoque(self, admin):
+        p = _prod(admin, "TEST_Coturno", [{"size": "40", "stock": 5}])
+        o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
+                                                        "items": [{"product_id": p["id"], "name": p["name"], "size": "40", "qty": 2, "unit_price": 10}]}).json()
+        CREATED["orders"].append(o["id"])
+
+        completed = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**o, "status": "Retirado"})
+        assert completed.status_code == 200, completed.text
+        assert _stock(admin, p["id"], "40") == 3
+
+        reopened = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**completed.json(), "status": "Aprovado"})
+        assert reopened.status_code == 200, reopened.text
+        assert _stock(admin, p["id"], "40") == 5
+
     def test_desmontagem_farda(self, admin):
         farda = _prod(admin, "TEST_FARDA CAMUFLADA", [{"size": "M", "stock": 1}])
         calca = _prod(admin, "TEST_CALÇA CAMUFLADA", [{"size": "M", "stock": 0}])

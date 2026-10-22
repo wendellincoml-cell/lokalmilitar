@@ -1013,8 +1013,16 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     old = await db.orders.find_one({"id": oid})
     if not old:
         raise HTTPException(404, "Pedido não encontrado")
-    if payload.get("status") in ("Entregue", "Retirado") and not _order_is_fulfilled(old) and not allow_fulfillment:
-        raise HTTPException(400, "Use a ação Entregar/Retirar para concluir o pedido")
+    if (
+        "status" in payload
+        and payload["status"] != old.get("status")
+        and not allow_fulfillment
+        and user.get("role") != "admin"
+    ):
+        if _order_is_fulfilled(old):
+            raise HTTPException(403, "Somente administradores podem alterar o status de um pedido concluído")
+        if _order_is_fulfilled({"status": payload["status"]}):
+            raise HTTPException(400, "Use a ação Entregar/Retirar para concluir o pedido")
     payload.pop("id", None)
     payload.pop("number", None)
     items = payload.get("items", old.get("items", []))
@@ -1054,6 +1062,15 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     if _order_is_fulfilled(order):
+        if order.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
+            stock_applied = order.get("stock_applied")
+            if stock_applied is None:
+                stock_applied = await _has_order_stock_movements(oid)
+            if not stock_applied:
+                if await _has_order_stock_movements(oid):
+                    await _reverse_order_stock(oid)
+                await _apply_order_stock(order)
+                return await db.orders.find_one({"id": oid}, {"_id": 0})
         raise HTTPException(400, "O pedido já foi entregue ou retirado")
     delivery_type = payload.get("delivery_type")
     if delivery_type not in ("ENTREGA", "RETIRADA"):

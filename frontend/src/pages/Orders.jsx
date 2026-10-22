@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router-dom";
 import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -16,6 +17,8 @@ const BLANK_ORDER = {
 };
 
 export default function Orders({ mode }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const isTrocas = mode === "trocas";
   const [searchParams, setSearchParams] = useSearchParams();
   const autoPrintOrderId = searchParams.get("printOrder");
@@ -286,9 +289,10 @@ export default function Orders({ mode }) {
                     <option>VENDA</option><option>TROCA</option><option>DEVOLUCAO</option><option>ORCAMENTO</option>
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Status</div>
-                  <select className="input" value={editing.status} disabled={["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
+                  <select className="input" value={editing.status} disabled={!isAdmin && ["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
                     <option>Orçamento</option><option>Aprovado</option><option>Separado</option><option>Cancelado</option>
-                    {["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
+                    {isAdmin && <><option>Entregue</option><option>Retirado</option></>}
+                    {!isAdmin && ["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Pagamento</div>
                   <select className="input" value={editing.payment} onChange={e=>setEditing({...editing, payment:e.target.value})}>
