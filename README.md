@@ -28,6 +28,14 @@ Em um banco novo, nenhum usuário é criado automaticamente. Para inicializar o 
 4. Depois de receber sucesso, remova `ADMIN_BOOTSTRAP_TOKEN` do Render e faça outro deploy. O endpoint só funciona enquanto esse segredo estiver configurado e o banco não tiver usuários; um bloqueio no banco impede inicializações concorrentes ou repetidas.
 5. Entre no frontend com o e-mail e a senha informados. O administrador poderá então gerar convites em **Configurações → Convites para cadastro**.
 
+### Redefinir a senha do administrador
+
+Se o administrador existente não conseguir entrar:
+
+1. Gere um segredo aleatório com pelo menos 32 caracteres e configure-o temporariamente no Render como `ADMIN_PASSWORD_RESET_TOKEN`.
+2. Após o deploy, abra `/docs` da API e execute `POST /api/auth/reset-admin-password`, enviando `X-Admin-Reset-Token` e o e-mail exato da conta `admin`, além de uma nova senha com pelo menos 12 caracteres.
+3. Após sucesso, remova `ADMIN_PASSWORD_RESET_TOKEN` do Render e faça um novo deploy. O reset só pode ser concluído uma vez por banco; não reutilize a senha antiga.
+
 ### 3. Publicar o frontend na Vercel
 
 1. Importe este repositório na Vercel e defina **Root Directory** como `frontend`.

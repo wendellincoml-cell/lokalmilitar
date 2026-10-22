@@ -146,6 +146,10 @@ class BootstrapAdmin(BaseModel):
     password: str = Field(min_length=12, max_length=72)
     name: str = Field(min_length=1, max_length=120)
 
+class AdminPasswordReset(BaseModel):
+    email: EmailStr
+    new_password: str = Field(min_length=12, max_length=72)
+
 class InviteCreate(BaseModel):
     expires_in_days: int = Field(default=7, ge=1, le=30)
 
@@ -566,6 +570,47 @@ async def bootstrap_admin(
         raise HTTPException(500, "Não foi possível criar o administrador inicial")
 
     return {"id": doc["id"], "email": doc["email"], "name": doc["name"], "role": "admin"}
+
+@api.post("/auth/reset-admin-password")
+async def reset_admin_password(
+    payload: AdminPasswordReset,
+    reset_token: str = Header(..., alias="X-Admin-Reset-Token"),
+):
+    expected_token = os.environ.get("ADMIN_PASSWORD_RESET_TOKEN", "")
+    if len(expected_token) < 32:
+        raise HTTPException(404, "Not found")
+    if not secrets.compare_digest(reset_token, expected_token):
+        raise HTTPException(403, "Token inválido")
+
+    admin = await db.users.find_one(
+        {"email": str(payload.email).lower(), "role": "admin"},
+        {"_id": 0, "id": 1, "email": 1},
+    )
+    if not admin:
+        raise HTTPException(404, "Administrador não encontrado")
+
+    lock_id = "initial-admin-password-reset"
+    try:
+        await db.admin_bootstrap.insert_one({"_id": lock_id, "created_at": now_iso()})
+    except DuplicateKeyError as exc:
+        raise HTTPException(409, "A redefinição já foi utilizada") from exc
+
+    try:
+        result = await db.users.update_one(
+            {"id": admin["id"], "role": "admin"},
+            {"$set": {"password_hash": hash_pw(payload.new_password)}},
+        )
+        if result.matched_count != 1:
+            await db.admin_bootstrap.delete_one({"_id": lock_id})
+            raise HTTPException(404, "Administrador não encontrado")
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Falha ao redefinir a senha do administrador")
+        await db.admin_bootstrap.delete_one({"_id": lock_id})
+        raise HTTPException(500, "Não foi possível redefinir a senha")
+
+    return {"password_reset": True, "email": admin["email"]}
 
 @api.post("/auth/invitations")
 async def create_registration_invite(
