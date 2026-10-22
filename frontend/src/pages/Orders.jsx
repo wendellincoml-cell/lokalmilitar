@@ -15,6 +15,7 @@ const BLANK_ORDER = {
   items: [], returned_items: [], exchanged_items: [],
   discount: 0, payment: "PIX", notes: "", avulsa: false, original_order_id: "",
 };
+const ORDER_STATUSES = ["Orçamento", "Aprovado", "Separado", "Entregue", "Retirado", "Cancelado"];
 
 export default function Orders({ mode }) {
   const { user } = useAuth();
@@ -74,10 +75,26 @@ export default function Orders({ mode }) {
       if (editing.items.length === 0 && editing.type==="VENDA") return toast.error("Adicione ao menos 1 item");
       if (editing.type !== "VENDA" && !editing.avulsa && !editing.original_order_id)
         return toast.error("Vincule a um pedido ou marque Avulsa");
+      const invalidReturnSize = (editing.returned_items || []).some((item) => {
+        if (!item.product_id) return false;
+        const sizes = prodById[item.product_id]?.sizes || [];
+        return sizes.length > 0 && !sizes.some((size) => size.size === item.size);
+      });
+      if (invalidReturnSize) return toast.error("Selecione um tamanho cadastrado para o produto devolvido");
       if (editing.id) await api.put(`/orders/${editing.id}`, editing);
       else await api.post("/orders", editing);
       toast.success("Pedido salvo"); setOpen(false); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro"); }
+  };
+
+  const changeOrderStatus = async (order, status) => {
+    try {
+      await api.put(`/orders/${order.id}`, { status });
+      toast.success(`Status do pedido #${order.number} atualizado`);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível alterar o status do pedido");
+    }
   };
 
   const remove = async (id) => {
@@ -131,7 +148,12 @@ export default function Orders({ mode }) {
         vehicle_id: fulfillment.delivery_type === "ENTREGA" ? fulfillment.vehicle_id || null : null,
         signature: fulfillment.signature || null,
       });
-      toast.success(fulfillment.delivery_type === "ENTREGA" ? "Pedido entregue e estoque atualizado" : "Pedido retirado e estoque atualizado");
+      const completionMessage = {
+        ENTREGA: "Pedido entregue e estoque atualizado",
+        RETIRADA: "Pedido retirado e estoque atualizado",
+        CORREIO: "Pedido enviado por correio/transportadora e estoque atualizado",
+      };
+      toast.success(completionMessage[fulfillment.delivery_type]);
       setFulfillment(null);
       load();
     } catch (error) {
@@ -232,7 +254,22 @@ export default function Orders({ mode }) {
                 <td className="text-center">{(o.items||[]).length}</td>
                 <td>{formatBRL(o.total||0)}</td>
                 <td>{o.payment}</td>
-                <td><span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span></td>
+                <td>
+                  {isAdmin ? (
+                    <select
+                      className="max-w-[110px] text-[10px] px-1 py-0.5 bg-neutral-200"
+                      value={o.status}
+                      onChange={(event) => changeOrderStatus(o, event.target.value)}
+                      aria-label={`Status do pedido #${o.number}`}
+                      data-testid={`order-status-${o.number}`}
+                    >
+                      {!ORDER_STATUSES.includes(o.status) && <option>{o.status}</option>}
+                      {ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
+                    </select>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span>
+                  )}
+                </td>
                 <td className="flex gap-1 py-2 flex-wrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>openEdit(o)} data-testid={`edit-order-${o.number}`}><Edit size={13}/></button>
                   {!["Entregue", "Retirado"].includes(o.status) && (
@@ -384,13 +421,24 @@ export default function Orders({ mode }) {
                     <div key={i} className="grid grid-cols-4 sm:grid-cols-12 gap-2 mt-1">
                       <select className="input col-span-4 sm:col-span-5" value={r.product_id} onChange={e=>{
                         const p = prodById[e.target.value]; const ri=[...editing.returned_items];
-                        ri[i] = { ...ri[i], product_id:e.target.value, name:p?.name||"" };
+                        ri[i] = { ...ri[i], product_id:e.target.value, name:p?.name||"", size:"" };
                         setEditing({...editing, returned_items:ri});
                       }}>
                         <option value="">—</option>
                         {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
-                      <input className="input col-span-1 sm:col-span-2" placeholder="Tam" value={r.size||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].size=e.target.value; setEditing({...editing, returned_items:ri});}}/>
+                      <select
+                        className="input col-span-1 sm:col-span-2"
+                        value={(prodById[r.product_id]?.sizes || []).some((size) => size.size === r.size) ? r.size : ""}
+                        onChange={e=>{const ri=[...editing.returned_items]; ri[i] = { ...ri[i], size:e.target.value }; setEditing({...editing, returned_items:ri});}}
+                        aria-label={`Tamanho do item devolvido ${i + 1}`}
+                        data-testid={`returned-item-size-${i}`}
+                      >
+                        <option value="">Tam</option>
+                        {(prodById[r.product_id]?.sizes || []).map((size) => (
+                          <option key={size.size} value={size.size}>{size.size} ({size.stock})</option>
+                        ))}
+                      </select>
                       <input className="input col-span-1 sm:col-span-1" type="number" value={r.qty} onChange={e=>{const ri=[...editing.returned_items]; ri[i].qty=Number(e.target.value); setEditing({...editing, returned_items:ri});}}/>
                       <input className="input col-span-2 sm:col-span-4" placeholder="Motivo (ex: tamanho errado)" value={r.reason||""} onChange={e=>{const ri=[...editing.returned_items]; ri[i].reason=e.target.value; setEditing({...editing, returned_items:ri});}}/>
                     </div>
@@ -434,6 +482,7 @@ export default function Orders({ mode }) {
                   data-testid="fulfillment-delivery-type">
                   <option value="ENTREGA">Entrega</option>
                   <option value="RETIRADA">Retirada pelo cliente</option>
+                  <option value="CORREIO">Correio/transportadora</option>
                 </select>
               </label>
               {fulfillment.delivery_type === "ENTREGA" && (

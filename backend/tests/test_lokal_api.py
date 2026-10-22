@@ -151,6 +151,20 @@ class TestOrders:
         assert repeated.status_code == 400
         assert _stock(admin, p["id"], "42") == 3
 
+    def test_entrega_por_transportadora_baixa_estoque_sem_viagem(self, admin):
+        p = _prod(admin, "TEST_Casaco", [{"size": "M", "stock": 4}])
+        o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
+                                                        "items": [{"product_id": p["id"], "name": p["name"], "size": "M", "qty": 1, "unit_price": 25}]}).json()
+        CREATED["orders"].append(o["id"])
+
+        response = admin.post(f"{BASE_URL}/api/orders/{o['id']}/fulfill", json={"delivery_type": "CORREIO"})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "Entregue"
+        assert response.json()["delivery_type"] == "CORREIO"
+        assert _stock(admin, p["id"], "M") == 3
+        trips = [expense for expense in admin.get(f"{BASE_URL}/api/expenses").json() if expense.get("order_id") == o["id"]]
+        assert trips == []
+
     def test_admin_altera_status_e_sincroniza_estoque(self, admin):
         p = _prod(admin, "TEST_Coturno", [{"size": "40", "stock": 5}])
         o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
@@ -230,6 +244,32 @@ def test_settings_persist(admin):
     assert r.status_code == 200 and r.json()["background_color"] == "#E8E4D9"
     assert admin.get(f"{BASE_URL}/api/settings").json()["background_color"] == "#E8E4D9"
     admin.put(f"{BASE_URL}/api/settings", json={"background_color": old.get("background_color", "#F5F5F5")})
+
+def test_order_number_sequence_is_admin_configurable_without_decreasing(admin):
+    sequence = admin.get(f"{BASE_URL}/api/orders/number-sequence")
+    assert sequence.status_code == 200, sequence.text
+    current_number = sequence.json()["current_number"]
+    assert isinstance(current_number, int)
+
+    unchanged = admin.put(
+        f"{BASE_URL}/api/orders/number-sequence",
+        json={"current_number": current_number},
+    )
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["current_number"] == current_number
+
+    if current_number > 0:
+        lower = admin.put(
+            f"{BASE_URL}/api/orders/number-sequence",
+            json={"current_number": current_number - 1},
+        )
+        assert lower.status_code == 400
+
+    invalid = admin.put(
+        f"{BASE_URL}/api/orders/number-sequence",
+        json={"current_number": -1},
+    )
+    assert invalid.status_code == 422
 
 
 def test_dashboard(admin):

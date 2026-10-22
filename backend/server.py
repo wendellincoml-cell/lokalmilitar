@@ -278,7 +278,7 @@ class Order(BaseModel):
     expected_date: Optional[str] = None
     vehicle_id: Optional[str] = None
     vehicle_name: Optional[str] = None
-    delivery_type: Optional[str] = None  # ENTREGA | RETIRADA
+    delivery_type: Optional[str] = None  # ENTREGA | RETIRADA | CORREIO
     signature: Optional[str] = None
     stock_applied: bool = False
     created_at: str = Field(default_factory=now_iso)
@@ -351,6 +351,9 @@ class Commission(BaseModel):
     amount: float = 0
     paid: bool = False
     created_at: str = Field(default_factory=now_iso)
+
+class OrderNumberSequenceUpdate(BaseModel):
+    current_number: int = Field(ge=0)
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -917,6 +920,33 @@ async def _next_order_number() -> int:
         return 1
     return int(counter.get("seq") or 1)
 
+async def _current_order_number() -> int:
+    counter = await db.counters.find_one({"_id": "orders"}, {"seq": 1})
+    latest_order = await db.orders.find_one({}, {"number": 1}, sort=[("number", -1)])
+    return max(
+        int((counter or {}).get("seq") or 0),
+        int((latest_order or {}).get("number") or 0),
+    )
+
+@api.get("/orders/number-sequence")
+async def get_order_number_sequence(user: dict = Depends(require_admin)):
+    return {"current_number": await _current_order_number()}
+
+@api.put("/orders/number-sequence")
+async def update_order_number_sequence(
+    payload: OrderNumberSequenceUpdate,
+    user: dict = Depends(require_admin),
+):
+    current_number = await _current_order_number()
+    if payload.current_number < current_number:
+        raise HTTPException(400, f"O número não pode ser menor que o número atual ({current_number})")
+    await db.counters.update_one(
+        {"_id": "orders"},
+        {"$max": {"seq": payload.current_number}},
+        upsert=True,
+    )
+    return {"current_number": await _current_order_number()}
+
 async def _apply_order_stock(order: dict):
     """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
     items = order.get("items", []) + order.get("returned_items", [])
@@ -1073,10 +1103,10 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
                 return await db.orders.find_one({"id": oid}, {"_id": 0})
         raise HTTPException(400, "O pedido já foi entregue ou retirado")
     delivery_type = payload.get("delivery_type")
-    if delivery_type not in ("ENTREGA", "RETIRADA"):
+    if delivery_type not in ("ENTREGA", "RETIRADA", "CORREIO"):
         raise HTTPException(400, "Selecione entrega ou retirada")
     update = {
-        "status": "Entregue" if delivery_type == "ENTREGA" else "Retirado",
+        "status": "Retirado" if delivery_type == "RETIRADA" else "Entregue",
         "delivery_type": delivery_type,
     }
     vehicle_id = payload.get("vehicle_id")

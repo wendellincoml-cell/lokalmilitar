@@ -27,6 +27,7 @@
   --sidebar-text: #E6E6E6;
   --button-text: #FFFFFF;
   --card-header-bg: #111111;
+  --card-header-background: #111111;
   --card-header-text: #E9DFC6;
 
   --background: var(--system-bg-color);
@@ -86,7 +87,7 @@ h1, h2, h3 { color: var(--title-color); }
   color: var(--panel-fg);
 }
 .lm-card-head {
-  background: linear-gradient(90deg, var(--card-header-bg) 0%, color-mix(in srgb, var(--card-header-bg) 78%, var(--olive)) 100%);
+  background: var(--card-header-background);
   color: var(--card-header-text);
   font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em;
   border-radius: 6px 6px 0 0;
@@ -155,7 +156,7 @@ h1, h2, h3 { color: var(--title-color); }
 /* Tables */
 .lm-table-wrap { background: var(--cream); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .lm-table, .table-mono { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-.lm-table thead tr, .table-mono thead tr { background: var(--card-header-bg) !important; }
+.lm-table thead tr, .table-mono thead tr { background: var(--card-header-background) !important; }
 .lm-table th, .table-mono th {
   color: var(--card-header-text) !important; font-family: var(--font-head); text-transform: uppercase;
   font-weight: 500; font-size: 0.78rem; letter-spacing: .05em; padding: 10px 12px !important; text-align: left;

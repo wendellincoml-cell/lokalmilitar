@@ -69,12 +69,50 @@ function ThemeSection({ theme, applyTheme, onSave, onReset }) {
           <select className="lm-input" value={theme.font_body} onChange={(e) => applyTheme({ font_body: e.target.value })} data-testid="theme-font-body">
             {BODY_FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
           </select></label>
-        {THEME_COLORS.map(([k, l]) => (
+        {THEME_COLORS.filter(([key]) => key !== "card_header_bg" || !theme.card_header_metallic).map(([k, l]) => (
           <label key={k} className="flex items-center gap-3">
             <input type="color" value={theme[k]} onChange={(e) => applyTheme({ [k]: e.target.value })} className="w-12 h-10 border rounded cursor-pointer" data-testid={`theme-${k}`} />
             <span className="text-sm">{l} <span className="font-mono text-xs text-neutral-500">{theme[k]}</span></span>
           </label>
         ))}
+      </div>
+      <div className="border rounded p-3 mt-3 space-y-3" data-testid="metallic-header-gradient">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(theme.card_header_metallic)}
+            onChange={(event) => applyTheme({ card_header_metallic: event.target.checked })}
+            data-testid="theme-card-header-metallic"
+          />
+          Degradê metálico nos cabeçalhos de cartões e tabelas
+        </label>
+        {theme.card_header_metallic && (
+          <>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {[["card_header_gradient_start", "Cor inicial"], ["card_header_gradient_end", "Cor final"]].map(([key, label]) => (
+                <label key={key} className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={theme[key]}
+                    onChange={(event) => applyTheme({ [key]: event.target.value })}
+                    className="w-12 h-10 border rounded cursor-pointer"
+                    aria-label={label}
+                    data-testid={`theme-${key}`}
+                  />
+                  <span className="text-sm">{label} <span className="font-mono text-xs text-neutral-500">{theme[key]}</span></span>
+                </label>
+              ))}
+            </div>
+            <div
+              className="h-10 rounded border"
+              style={{
+                background: `linear-gradient(115deg, ${theme.card_header_gradient_start} 0%, color-mix(in srgb, ${theme.card_header_gradient_start} 65%, white) 18%, ${theme.card_header_gradient_end} 40%, color-mix(in srgb, ${theme.card_header_gradient_end} 40%, white) 52%, ${theme.card_header_gradient_start} 72%, ${theme.card_header_gradient_end} 100%)`,
+              }}
+              aria-label="Prévia do degradê metálico"
+              data-testid="metallic-header-gradient-preview"
+            />
+          </>
+        )}
       </div>
       <div className="lm-card p-3 mt-3" data-testid="theme-preview">
         <h3 className="text-xl font-bold" style={{ color: "var(--title-color)" }}>Prévia do título</h3>
@@ -187,6 +225,7 @@ export default function Settings() {
   const [userEdits, setUserEdits] = useState({});
   const [passwordChange, setPasswordChange] = useState({ current_password: "", new_password: "" });
   const [invitations, setInvitations] = useState([]);
+  const [currentOrderNumber, setCurrentOrderNumber] = useState("");
   const [inviteDays, setInviteDays] = useState(7);
   const [createdInviteLink, setCreatedInviteLink] = useState("");
   const isAdmin = user?.role === "admin";
@@ -207,8 +246,30 @@ export default function Settings() {
     });
     api.get("/categories").then((r) => setCategories(r.data));
     loadUsers();
-    if (isAdmin) loadInvitations();
+    if (isAdmin) {
+      loadInvitations();
+      api.get("/orders/number-sequence").then((r) => {
+        setCurrentOrderNumber(String(r.data.current_number));
+      }).catch((error) => {
+        toast.error(error.response?.data?.detail || "Não foi possível carregar a numeração dos pedidos");
+      });
+    }
   }, [applyDashboardPreferences, isAdmin]);
+
+  const saveCurrentOrderNumber = async () => {
+    const currentNumber = Number(currentOrderNumber);
+    if (!Number.isSafeInteger(currentNumber) || currentNumber < 0) {
+      toast.error("Informe um número inteiro válido");
+      return;
+    }
+    try {
+      const { data } = await api.put("/orders/number-sequence", { current_number: currentNumber });
+      setCurrentOrderNumber(String(data.current_number));
+      toast.success(`Numeração atualizada. O próximo pedido será o #${data.current_number + 1}`);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível atualizar a numeração dos pedidos");
+    }
+  };
 
   const createInvite = async () => {
     try {
@@ -356,6 +417,36 @@ export default function Settings() {
         onChange={applyDashboardPreferences}
         onSave={saveDashboard}
       />
+
+      {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="order-number-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1">Numeração dos pedidos</h2>
+          <p className="text-xs text-neutral-500">Ajuste o número atual da sequência. O próximo pedido receberá o número informado mais 1. Não é possível usar um número menor que a sequência atual.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-xs font-mono">
+            Número atual
+            <input
+              className="block border px-2 py-1.5 text-sm mt-1"
+              type="number"
+              min={currentOrderNumber || 0}
+              step="1"
+              value={currentOrderNumber}
+              onChange={(event) => setCurrentOrderNumber(event.target.value)}
+              aria-label="Número atual dos pedidos"
+              data-testid="current-order-number"
+            />
+          </label>
+          <button
+            className="lokal-btn-primary"
+            onClick={saveCurrentOrderNumber}
+            disabled={currentOrderNumber === ""}
+            data-testid="save-order-number"
+          >
+            SALVAR NUMERAÇÃO
+          </button>
+        </div>
+      </section>}
 
       <section className="lokal-panel p-4">
         <h2 className="lokal-stencil text-sm mb-3">Dados da empresa (impressão)</h2>

@@ -11,6 +11,9 @@ export const DEFAULT_THEME = {
   input_bg: "#FFFFFF", input_text: "#111111", sidebar_text: "#E6E6E6",
   button_text: "#FFFFFF", chip_color: "#E8E2D5",
   card_header_bg: "#111111", card_header_text: "#E9DFC6",
+  card_header_metallic: false,
+  card_header_gradient_start: "#4B5320",
+  card_header_gradient_end: "#B8860B",
 };
 const readTheme = () => {
   try { return { ...DEFAULT_THEME, ...JSON.parse(localStorage.getItem("system_theme") || "{}") }; } catch { return DEFAULT_THEME; }
@@ -57,6 +60,9 @@ export function AuthProvider({ children }) {
     s.setProperty("--button-text", theme.button_text);
     s.setProperty("--chip", theme.chip_color);
     s.setProperty("--card-header-bg", theme.card_header_bg);
+    s.setProperty("--card-header-background", theme.card_header_metallic
+      ? `linear-gradient(115deg, ${theme.card_header_gradient_start} 0%, color-mix(in srgb, ${theme.card_header_gradient_start} 65%, white) 18%, ${theme.card_header_gradient_end} 40%, color-mix(in srgb, ${theme.card_header_gradient_end} 40%, white) 52%, ${theme.card_header_gradient_start} 72%, ${theme.card_header_gradient_end} 100%)`
+      : theme.card_header_bg);
     s.setProperty("--card-header-text", theme.card_header_text);
   }, [theme]);
 

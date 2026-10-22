@@ -136,6 +136,7 @@ export default function PrintOrderA4({ order, settings, customer, vendor, captur
             <Info label="CPF do vendedor" value={vendor?.cpf} />
           </div>
           <Info label="Forma de pagamento" value={order.payment} />
+          {order.delivery_type === "CORREIO" && <Info label="Forma de entrega" value="Correio/transportadora" />}
           {order.status === "Entregue" && order.delivery_type === "ENTREGA" && order.vehicle_name && <Info label="Veículo utilizado" value={order.vehicle_name} />}
           {order.original_order_id && <Info label="Referente ao pedido" value={order.original_number ? `#${order.original_number}` : "Vinculado"} />}
           {order.avulsa && <Info label="Tipo" value="Troca/devolução avulsa" />}
