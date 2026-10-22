@@ -1,11 +1,17 @@
 import axios from "axios";
 
 const configuredUrl = process.env.REACT_APP_BACKEND_URL?.trim().replace(/\/+$/, "") || "";
-const pointsToLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configuredUrl);
+const productionApiUrl = "https://lokalmilitar-api.onrender.com";
+const backendUrl =
+  configuredUrl === "https://lokalmilitar.onrender.com" ? productionApiUrl : configuredUrl;
 const isRemoteBrowser =
   typeof window !== "undefined" &&
   !["localhost", "127.0.0.1"].includes(window.location.hostname);
-const BACKEND_URL = pointsToLocalhost && isRemoteBrowser ? "" : configuredUrl;
+const pointsToLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(backendUrl);
+const BACKEND_URL =
+  pointsToLocalhost && isRemoteBrowser
+    ? productionApiUrl
+    : backendUrl || (isRemoteBrowser ? productionApiUrl : "");
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API });
