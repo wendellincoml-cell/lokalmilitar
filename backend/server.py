@@ -12,11 +12,12 @@ import bcrypt
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from pymongo.errors import DuplicateKeyError
 
 # ---------- DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -139,6 +140,11 @@ class UserRegister(BaseModel):
     password: str
     name: str
     invite_code: str
+
+class BootstrapAdmin(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=72)
+    name: str = Field(min_length=1, max_length=120)
 
 class InviteCreate(BaseModel):
     expires_in_days: int = Field(default=7, ge=1, le=30)
@@ -514,6 +520,52 @@ async def register_user(payload: UserRegister):
     doc.pop("_id", None)
     doc.pop("password_hash", None)
     return doc
+
+@api.post("/auth/bootstrap-admin")
+async def bootstrap_admin(
+    payload: BootstrapAdmin,
+    bootstrap_token: str = Header(..., alias="X-Admin-Bootstrap-Token"),
+):
+    expected_token = os.environ.get("ADMIN_BOOTSTRAP_TOKEN", "")
+    if len(expected_token) < 32:
+        raise HTTPException(404, "Not found")
+    if not secrets.compare_digest(bootstrap_token, expected_token):
+        raise HTTPException(403, "Token inválido")
+    if await db.users.count_documents({}) != 0:
+        raise HTTPException(409, "A inicialização já foi concluída")
+
+    lock_id = "initial-admin"
+    try:
+        await db.admin_bootstrap.insert_one({"_id": lock_id, "created_at": now_iso()})
+    except DuplicateKeyError as exc:
+        raise HTTPException(409, "A inicialização já foi iniciada") from exc
+
+    try:
+        if await db.users.count_documents({}) != 0:
+            await db.admin_bootstrap.delete_one({"_id": lock_id})
+            raise HTTPException(409, "A inicialização já foi concluída")
+        name = payload.name.strip()
+        if not name:
+            await db.admin_bootstrap.delete_one({"_id": lock_id})
+            raise HTTPException(422, "Informe um nome")
+        email = str(payload.email).lower()
+        doc = {
+            "id": new_id(),
+            "email": email,
+            "name": name,
+            "role": "admin",
+            "password_hash": hash_pw(payload.password),
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(doc)
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Falha ao criar o administrador inicial")
+        await db.admin_bootstrap.delete_one({"_id": lock_id})
+        raise HTTPException(500, "Não foi possível criar o administrador inicial")
+
+    return {"id": doc["id"], "email": doc["email"], "name": doc["name"], "role": "admin"}
 
 @api.post("/auth/invitations")
 async def create_registration_invite(

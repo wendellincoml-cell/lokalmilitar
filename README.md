@@ -18,6 +18,16 @@ O frontend é publicado na Vercel, a API FastAPI no Render e o banco no MongoDB 
 3. Faça o deploy e copie a URL pública da API, por exemplo `https://lokalmilitar-api.onrender.com`.
 4. Confirme que a API responde em `https://<URL-DA-API>/docs`.
 
+### Criar o primeiro administrador
+
+Em um banco novo, nenhum usuário é criado automaticamente. Para inicializar o acesso:
+
+1. Gere um segredo aleatório com pelo menos 32 caracteres e adicione-o temporariamente ao serviço da API no Render como `ADMIN_BOOTSTRAP_TOKEN`. Não o salve no repositório nem o compartilhe.
+2. Aguarde o novo deploy e abra `https://<URL-DA-API>/docs`.
+3. Execute `POST /api/auth/bootstrap-admin`, informando o cabeçalho `X-Admin-Bootstrap-Token` com o segredo e o corpo com `name`, `email` e `password`. A senha precisa ter pelo menos 12 caracteres.
+4. Depois de receber sucesso, remova `ADMIN_BOOTSTRAP_TOKEN` do Render e faça outro deploy. O endpoint só funciona enquanto esse segredo estiver configurado e o banco não tiver usuários; um bloqueio no banco impede inicializações concorrentes ou repetidas.
+5. Entre no frontend com o e-mail e a senha informados. O administrador poderá então gerar convites em **Configurações → Convites para cadastro**.
+
 ### 3. Publicar o frontend na Vercel
 
 1. Importe este repositório na Vercel e defina **Root Directory** como `frontend`.
