@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { setOfflineUser } from "@/lib/offlineSync";
 import { DEFAULT_DASHBOARD_PREFERENCES, mergeDashboardPreferences } from "@/pages/dashboardPreferences";
 
 const AuthCtx = createContext(null);
@@ -26,6 +27,10 @@ const readDashboardPreferences = () => {
     return DEFAULT_DASHBOARD_PREFERENCES;
   }
 };
+const readCachedUser = (storage) => {
+  try { return JSON.parse(storage.getItem("lokal_user") || "null"); } catch { return null; }
+};
+const saveCachedUser = (storage, user) => storage.setItem("lokal_user", JSON.stringify(user));
 const readableTextColor = (hex) => {
   const channels = hex.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
   if (!channels) return "#111111";
@@ -113,22 +118,38 @@ export function AuthProvider({ children }) {
       const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
       if (!token) {
         const publicSession = isPublic && sessionStorage.getItem("lokal_public_access") === "true";
-        setUser(publicSession ? {
+        const publicUser = publicSession ? {
           id: "public-access",
           email: "",
           name: "Acesso público",
           role: "admin",
-        } : null);
+        } : null;
+        setUser(publicUser);
+        setOfflineUser(publicUser?.id);
         return;
       }
+      const userStorage = localStorage.getItem("lokal_token") ? localStorage : sessionStorage;
+      const cachedUser = readCachedUser(userStorage);
       try {
         const response = await api.get("/auth/me");
-        if (!cancelled) setUser(response.data);
-      } catch {
         if (!cancelled) {
-          setUser(null);
-          localStorage.removeItem("lokal_token");
-          sessionStorage.removeItem("lokal_token");
+          setUser(response.data);
+          saveCachedUser(userStorage, response.data);
+          setOfflineUser(response.data.id);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          if (!error.response && cachedUser?.id) {
+            setUser(cachedUser);
+            setOfflineUser(cachedUser.id);
+          } else {
+            setUser(null);
+            setOfflineUser(null);
+            localStorage.removeItem("lokal_token");
+            sessionStorage.removeItem("lokal_token");
+            localStorage.removeItem("lokal_user");
+            sessionStorage.removeItem("lokal_user");
+          }
         }
       }
       if (cancelled) return;
@@ -158,8 +179,13 @@ export function AuthProvider({ children }) {
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_public_access");
+    localStorage.removeItem("lokal_user");
+    sessionStorage.removeItem("lokal_user");
+    setOfflineUser(null);
     (remember ? localStorage : sessionStorage).setItem("lokal_token", data.access_token);
+    (remember ? localStorage : sessionStorage).setItem("lokal_user", JSON.stringify(data.user));
     setUser(data.user);
+    setOfflineUser(data.user.id);
     return data.user;
   };
 
@@ -167,6 +193,9 @@ export function AuthProvider({ children }) {
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_public_access");
+    localStorage.removeItem("lokal_user");
+    sessionStorage.removeItem("lokal_user");
+    setOfflineUser(null);
     setUser(null);
     window.location.href = "/login";
   };
@@ -174,12 +203,14 @@ export function AuthProvider({ children }) {
   const enterPublicAccess = () => {
     if (!publicAccess) return;
     sessionStorage.setItem("lokal_public_access", "true");
-    setUser({
+    const publicUser = {
       id: "public-access",
       email: "",
       name: "Acesso público",
       role: "admin",
-    });
+    };
+    setUser(publicUser);
+    setOfflineUser(publicUser.id);
   };
 
   return (

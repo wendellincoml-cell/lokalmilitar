@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Outlet, NavLink, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import BrandMark from "@/components/BrandMark";
+import OfflineSyncStatus from "@/components/OfflineSyncStatus";
 import {
   LayoutDashboard, Package, Boxes, ShoppingCart, Repeat, Users, Tag, Truck,
   Wrench, Fuel, DollarSign, Settings, LogOut, Menu, X, Car
@@ -73,6 +74,7 @@ export default function AppLayout() {
       <main className="flex-1 p-4 md:p-6 pt-16 md:pt-6" style={{ background: "var(--system-bg-color)" }}>
         <Outlet />
       </main>
+      <OfflineSyncStatus />
     </div>
   );
 }
