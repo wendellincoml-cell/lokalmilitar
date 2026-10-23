@@ -5,38 +5,38 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
-import { DASHBOARD_KPIS } from "@/pages/dashboardPreferences";
+import { DASHBOARD_KPIS, getDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
 const UNIT = { "Fardamento": "peças", "Calçados": "pares" };
 
-const DashboardCardHeader = ({ children, icon: Icon, iconColor }) => (
-  <div className="lm-card-head" style={{ background: "var(--card-header-background)", color: "var(--card-header-text)" }}>
+const DashboardCardHeader = ({ children, icon: Icon, iconColor, textColor }) => (
+  <div className="lm-card-head" style={{ background: "var(--card-header-background)", color: textColor || "var(--card-header-text)" }}>
     <span className="text-[15px]">{children}</span>
     {Icon && <Icon size={18} color={iconColor} />}
   </div>
 );
 
-const CategoryCard = ({ cat, onClick, colors }) => {
+const CategoryCard = ({ cat, onClick, colors, textColor, position }) => {
   const Icon = ICONS[cat.icon] || Package;
   return (
-    <button onClick={onClick} className="lokal-tile text-left overflow-hidden" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid={`card-cat-${cat.name}`}>
-      <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent}>{cat.name}</DashboardCardHeader>
+    <button onClick={onClick} className="lokal-tile dashboard-grid-item text-left overflow-hidden" style={{ background: colors.card_background, color: textColor || colors.card_text, borderColor: colors.card_border, "--dashboard-row": position.row, "--dashboard-column": position.column }} data-testid={`card-cat-${cat.name}`}>
+      <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent} textColor={textColor}>{cat.name}</DashboardCardHeader>
       <div className="px-4 py-3">
-        <div className="flex items-baseline gap-2"><span className="font-head text-3xl font-bold">{Math.round(cat.qty)}</span><span className="text-sm" style={{ color: "var(--muted-text-color)" }}>{UNIT[cat.name] || "unid"}</span></div>
-        <div className="text-sm" style={{ color: "var(--muted-text-color)" }}>Valor: <b style={{ color: "var(--system-text-color)" }}>{formatBRL(cat.value)}</b></div>
+        <div className="flex items-baseline gap-2"><span className="font-head text-3xl font-bold">{Math.round(cat.qty)}</span><span className="text-sm" style={{ color: textColor || "var(--muted-text-color)" }}>{UNIT[cat.name] || "unid"}</span></div>
+        <div className="text-sm" style={{ color: textColor || "var(--muted-text-color)" }}>Valor: <b style={{ color: textColor || "var(--system-text-color)" }}>{formatBRL(cat.value)}</b></div>
       </div>
     </button>
   );
 };
 
-const Kpi = ({ icon: Icon, label, value, sub, onClick, testid, colors }) => (
-  <button onClick={onClick} className="lokal-tile text-left overflow-hidden" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid={testid}>
-    <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent}>{label}</DashboardCardHeader>
+const Kpi = ({ icon: Icon, label, value, sub, onClick, testid, colors, textColor, position }) => (
+  <button onClick={onClick} className="lokal-tile dashboard-grid-item text-left overflow-hidden" style={{ background: colors.card_background, color: textColor || colors.card_text, borderColor: colors.card_border, "--dashboard-row": position.row, "--dashboard-column": position.column }} data-testid={testid}>
+    <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent} textColor={textColor}>{label}</DashboardCardHeader>
     <div className="px-4 py-3">
       <div className="font-head text-2xl font-bold leading-tight">{value}</div>
-      {sub && <div className="text-sm truncate" style={{ color: "var(--muted-text-color)" }}>{sub}</div>}
+      {sub && <div className="text-sm truncate" style={{ color: textColor || "var(--muted-text-color)" }}>{sub}</div>}
     </div>
   </button>
 );
@@ -84,7 +84,8 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [closingDay, setClosingDay] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
-  const { chart_days: chartDays, chart_type: chartType, order, visibility } = dashboardPreferences;
+  const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
+  const textColor = dashboardPreferences.card_text_customized ? dashboardPreferences.colors.card_text : null;
   const colors = {
     background: "transparent",
     card_background: "var(--panel-bg)",
@@ -134,16 +135,17 @@ export default function Dashboard() {
     "chart",
   ];
   const displayOrder = [...order.filter((id) => available.includes(id)), ...available.filter((id) => !order.includes(id))];
+  const gridPositions = getDashboardGridPositions(displayOrder, available.filter((id) => id !== "chart"), configuredGridPositions);
   const renderItem = (id) => {
     if (id.startsWith("category:")) {
       const categoryName = id.slice("category:".length);
       const tile = tiles.find((item) => item.name === categoryName);
-      return tile && <CategoryCard key={id} cat={tile} colors={colors} onClick={() => nav(`/estoque?cat=${encodeURIComponent(tile.name)}`)} />;
+      return tile && <CategoryCard key={id} cat={tile} colors={colors} textColor={textColor} position={gridPositions[id]} onClick={() => nav(`/estoque?cat=${encodeURIComponent(tile.name)}`)} />;
     }
     if (id === "chart") {
       return (
         <section key={id} className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }}>
-          <DashboardCardHeader>Vendas · últimos {chartDays} dias</DashboardCardHeader>
+          <DashboardCardHeader textColor={textColor}>Vendas · últimos {chartDays} dias</DashboardCardHeader>
           <div className="h-64 p-3">
             <ResponsiveContainer width="100%" height="100%">
               {chartType === "linha" ? (
@@ -168,7 +170,7 @@ export default function Dashboard() {
     }
     const kpi = kpis[id];
     if (!kpi) return null;
-    return <Kpi key={id} {...kpi} colors={colors} />;
+    return <Kpi key={id} {...kpi} colors={colors} textColor={textColor} position={gridPositions[id]} />;
   };
 
   return (

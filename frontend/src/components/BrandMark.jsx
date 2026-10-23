@@ -2,7 +2,7 @@ import React from "react";
 
 export default function BrandMark({ align = "left", compact = false, light = false }) {
   const titleSize = compact ? 19 : 22;
-  const subtitleSize = compact ? 7 : 8;
+  const subtitleSize = compact ? 9 : 10;
   const titleStyle = {
     fontFamily: "'Black Ops One', 'Saira Stencil One', sans-serif",
     fontSize: titleSize,
@@ -26,6 +26,9 @@ export default function BrandMark({ align = "left", compact = false, light = fal
         marginTop: 5,
         textTransform: "uppercase",
         whiteSpace: "nowrap",
+        width: "100%",
+        textAlign: "justify",
+        textAlignLast: "justify",
       }}>
         UM NOVO CONCEITO
       </div>

@@ -1,16 +1,14 @@
 # LOKAL MILITAR ERP - backend regression tests (open access, users, products, stock, orders, desmontagem, trocas, commissions, crud, settings)
 import os
 import uuid
+from urllib.parse import urlparse
 import pytest
 import requests
 
 def _base():
-    url = os.environ.get("REACT_APP_BACKEND_URL")
-    if not url:
-        with open("/app/frontend/.env") as f:
-            for line in f:
-                if line.startswith("REACT_APP_BACKEND_URL="):
-                    url = line.split("=", 1)[1].strip()
+    url = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8765")
+    if urlparse(url).hostname not in {"localhost", "127.0.0.1", "::1"} and os.environ.get("ALLOW_REMOTE_TEST_BACKEND") != "true":
+        raise RuntimeError("Tests refuse remote backends by default; use a local test API or explicitly set ALLOW_REMOTE_TEST_BACKEND=true")
     return url.rstrip("/")
 
 BASE_URL = _base()
@@ -51,7 +49,7 @@ class TestOpenAccess:
         assert requests.get(f"{BASE_URL}/api/products").status_code == 200
         response = requests.get(f"{BASE_URL}/api/auth/me")
         assert response.status_code == 200
-        assert response.json()["id"] == "anonymous"
+        assert response.json()["id"] == "public-access"
 
     def test_login_endpoint_is_removed(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={"email": "x@example.com", "password": "x"})
@@ -73,9 +71,9 @@ class TestUsers:
         CREATED["users"].append(c.json()["id"])
         d = requests.delete(f"{BASE_URL}/api/auth/users/{uid}")
         assert d.status_code == 200
-        # Orders use a shared anonymous identity.
+        # Orders use the shared public-access identity when running without credentials.
         o = requests.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_C", "items": [], "status": "Orçamento"})
-        assert o.status_code == 200 and o.json()["vendor_id"] == "anonymous"
+        assert o.status_code == 200 and o.json()["vendor_id"] == "public-access"
         CREATED["orders"].append(o.json()["id"])
 
 
@@ -308,3 +306,16 @@ def test_dashboard(admin):
     for k in ("totals_by_cat", "orders_today", "pending", "chart", "low_stock", "commission_month"):
         assert k in d
     assert "Fardamento" in d["totals_by_cat"] and len(d["chart"]) == 7
+
+
+def test_day_close_is_saved_and_idempotent(admin):
+    first = admin.post(f"{BASE_URL}/api/dashboard/close-day")
+    assert first.status_code == 200, first.text
+    report = first.json()
+    assert {"id", "date", "closed_at", "summary", "orders", "stock_movements", "expenses"} <= report.keys()
+    assert {"orders_count", "orders_total", "stock_movements_count", "expenses_count", "expenses_total"} <= report["summary"].keys()
+
+    repeated = admin.post(f"{BASE_URL}/api/dashboard/close-day")
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["id"] == report["id"]
+    assert repeated.json()["already_closed"] is True

@@ -103,6 +103,13 @@ h1, h2, h3 { color: var(--title-color); }
   color: var(--panel-fg);
 }
 .lokal-tile:hover { border-color: var(--gold); box-shadow: 0 4px 14px rgba(75,83,32,0.14); transform: translateY(-1px); }
+.dashboard-grid-item { grid-column: auto; grid-row: auto; }
+@media (min-width: 1024px) {
+  .dashboard-grid-item {
+    grid-row: var(--dashboard-row);
+    grid-column: var(--dashboard-column);
+  }
+}
 .lm-icon-sq { width: 44px; height: 44px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #fff; flex-shrink: 0; }
 
 /* Hero (dark) panel */

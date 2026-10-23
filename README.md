@@ -51,4 +51,15 @@ Para permitir acesso sem login, configure `PUBLIC_ACCESS_MODE=true` nas variáve
 
 No Render, defina `CORS_ORIGINS` com a origem pública do frontend da Vercel, sem barra no final, e faça um novo deploy da API. Se usar domínios adicionais (como um domínio próprio), inclua cada origem separada por vírgula.
 
+### Backend local de testes
+
+Os testes de integração usam uma API local e um banco MongoDB separado (`lokalmilitar_test`). Eles não devem ser executados contra produção.
+
+1. Garanta que há um MongoDB local acessível em `127.0.0.1:27017`. Se ainda não houver um, inicie-o com `docker run --rm -d --name lokalmilitar-test-mongo -p 127.0.0.1:27017:27017 mongo:7`.
+2. Instale as dependências do backend com `python -m pip install -r backend/requirements.txt`.
+3. Execute `bash backend/tests/run_local.sh` na raiz do repositório. O script inicia a API apenas em `127.0.0.1`, usa o banco `lokalmilitar_test`, habilita acesso público só para a execução local e roda os testes em série.
+4. Para encerrar o MongoDB iniciado pelo exemplo, execute `docker stop lokalmilitar-test-mongo`.
+
+Se a porta MongoDB local padrão estiver ocupada por outro MongoDB local, use a porta em que ele está disponível: `TEST_MONGO_URL=mongodb://127.0.0.1:<PORTA> bash backend/tests/run_local.sh`. O script recusa conexões MongoDB não locais. O banco de teste fica separado e pode ser removido após conferir que `DB_NAME` é exatamente `lokalmilitar_test`.
+
 Não publique segredos nem copie valores dos arquivos `.env` locais para o repositório; cadastre-os como variáveis seguras no serviço correspondente. O arquivo `frontend/.env.example` é apenas um exemplo, não uma configuração de produção.

@@ -12,6 +12,9 @@ const KIND_STYLE = {
 const KIND_LABEL = { DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)" };
 const BLANK = { product_id: "", size: "", qty: 1, nf: "", reason: "", kind: "ENTRADA" };
 const BLANK_ENTRY_ITEM = { product_id: "", size: "", qty: 1 };
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[character]));
 
 const openPrint = (title, rows, totals) => {
   const w = window.open("", "_blank");
@@ -130,9 +133,48 @@ export default function Stock() {
     if (!order) return toast.error("Pedido relacionado não encontrado");
     window.open(`/pedidos?printOrder=${encodeURIComponent(orderId)}`, "_blank", "noopener,noreferrer");
   };
+  const printNfEntries = () => {
+    const entries = movements.filter((movement) => (
+      movement.kind === "ENTRADA"
+      && movement.nf
+      && (!q || `${movement.product_name} ${movement.reason || ""} ${movement.sku || ""} ${movement.nf}`.toLowerCase().includes(q.toLowerCase()))
+    ));
+    if (!entries.length) return toast.error("Nenhuma entrada por NF encontrada para imprimir");
+
+    const groupedEntries = new Map();
+    entries.forEach((entry) => {
+      const group = groupedEntries.get(entry.nf) || [];
+      group.push(entry);
+      groupedEntries.set(entry.nf, group);
+    });
+    const sections = [...groupedEntries.entries()].map(([nf, items]) => {
+      const orderedItems = items.sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
+      const totalQuantity = orderedItems.reduce((total, item) => total + Number(item.qty || 0), 0);
+      const dates = [...new Set(orderedItems.map((item) => formatDate(item.created_at)))];
+      const reasons = [...new Set(orderedItems.map((item) => item.reason).filter(Boolean))];
+      return `
+        <section>
+          <h2>Nota Fiscal ${escapeHtml(nf)}</h2>
+          <p>Data: ${escapeHtml(dates.join(" · ")) || "—"}${reasons.length ? ` · Observação: ${escapeHtml(reasons.join(" · "))}` : ""}</p>
+          <table><thead><tr><th>SKU</th><th>Produto</th><th>Tamanho</th><th>Quantidade</th></tr></thead>
+          <tbody>${orderedItems.map((item) => `<tr><td>${escapeHtml(item.sku || "")}</td><td>${escapeHtml(item.product_name)}</td><td>${escapeHtml(item.size || "—")}</td><td>${escapeHtml(item.qty)}</td></tr>`).join("")}</tbody></table>
+          <p class="total">Total da NF: ${escapeHtml(totalQuantity)}</p>
+        </section>`;
+    }).join("");
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return toast.error("Permita pop-ups para imprimir as entradas de NF");
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Entradas de estoque por NF</title>
+      <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1{font-size:20px;color:#354017}h2{font-size:15px;margin-bottom:4px;color:#354017}section{margin-top:24px;page-break-inside:avoid}p{margin:5px 0}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #aaa;padding:6px;text-align:left}th{background:#eee}.total{text-align:right;font-weight:bold}</style>
+      </head><body><h1>LOKAL MILITAR — Entradas de Estoque por NF</h1>
+      <p>Emitido em ${escapeHtml(new Date().toLocaleString("pt-BR"))} · ${groupedEntries.size} nota(s)</p>
+      ${sections}
+      </body></html>`);
+    printWindow.document.close();
+    printWindow.setTimeout(() => printWindow.print(), 500);
+  };
   const movs = useMemo(() => {
     const filtered = movements.filter((movement) => (
-      !q || (movement.product_name + (movement.reason || "") + (movement.sku || "")).toLowerCase().includes(q.toLowerCase())
+      !q || `${movement.product_name} ${movement.reason || ""} ${movement.sku || ""} ${movement.nf || ""}`.toLowerCase().includes(q.toLowerCase())
     ));
     const grouped = new Map();
 
@@ -177,6 +219,11 @@ export default function Stock() {
           <button className={tab === "posicao" ? "on" : ""} onClick={() => setTab("posicao")} data-testid="tab-posicao">Posição atual</button>
           <button className={tab === "historico" ? "on" : ""} onClick={() => setTab("historico")} data-testid="tab-historico">Histórico</button>
         </div>
+        {tab === "historico" && (
+          <button className="lm-btn lm-btn-dark" onClick={printNfEntries} data-testid="btn-print-nf-entries">
+            <Printer size={15} />Imprimir entradas de NF
+          </button>
+        )}
         <div className="relative flex-1 min-w-[200px]"><Search size={15} className="absolute left-3 top-3 text-neutral-400" />
           <input className="lm-input pl-9 h-full" placeholder="Buscar..." value={q} onChange={(e) => setQ(e.target.value)} data-testid="stock-search" /></div>
         <select className="lm-input !w-56" value={cat} onChange={(e) => { setCat(e.target.value); setSubcategory(""); }} data-testid="stock-cat-filter">

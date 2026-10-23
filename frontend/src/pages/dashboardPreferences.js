@@ -21,6 +21,8 @@ export const DASHBOARD_COLORS = {
 export const DEFAULT_DASHBOARD_PREFERENCES = {
   visibility: {},
   order: [],
+  grid_positions: {},
+  card_text_customized: false,
   chart_type: "linha",
   chart_days: 7,
   colors: DASHBOARD_COLORS,
@@ -32,6 +34,7 @@ export function mergeDashboardPreferences(value) {
       ...DEFAULT_DASHBOARD_PREFERENCES,
       visibility: {},
       order: [],
+      grid_positions: {},
       colors: { ...DASHBOARD_COLORS },
     };
   }
@@ -40,8 +43,40 @@ export function mergeDashboardPreferences(value) {
     ...value,
     visibility: { ...DEFAULT_DASHBOARD_PREFERENCES.visibility, ...value.visibility },
     order: Array.isArray(value.order) ? value.order : [],
+    grid_positions: value.grid_positions && typeof value.grid_positions === "object" && !Array.isArray(value.grid_positions)
+      ? value.grid_positions
+      : {},
+    card_text_customized: value.card_text_customized === true,
     chart_type: value.chart_type === "barras" ? "barras" : "linha",
     chart_days: [7, 14, 30].includes(value.chart_days) ? value.chart_days : 7,
     colors: { ...DASHBOARD_COLORS, ...value.colors },
   };
+}
+
+export function getDashboardGridPositions(order, itemIds, configuredPositions = {}) {
+  const positions = {};
+  const occupied = new Set();
+  const orderedItems = order.filter((id) => id !== "chart" && itemIds.includes(id));
+  const remainingItems = itemIds.filter((id) => id !== "chart" && !orderedItems.includes(id));
+
+  for (const id of [...orderedItems, ...remainingItems]) {
+    const configured = configuredPositions[id];
+    const row = Number(configured?.row);
+    const column = Number(configured?.column);
+    const valid = Number.isSafeInteger(row) && row > 0
+      && Number.isSafeInteger(column) && column >= 1 && column <= 4
+      && !occupied.has(`${row}:${column}`);
+    if (valid) {
+      positions[id] = { row, column };
+      occupied.add(`${row}:${column}`);
+      continue;
+    }
+
+    let index = 0;
+    while (occupied.has(`${Math.floor(index / 4) + 1}:${(index % 4) + 1}`)) index += 1;
+    const fallback = { row: Math.floor(index / 4) + 1, column: (index % 4) + 1 };
+    positions[id] = fallback;
+    occupied.add(`${fallback.row}:${fallback.column}`);
+  }
+  return positions;
 }

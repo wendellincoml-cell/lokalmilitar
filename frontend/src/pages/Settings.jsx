@@ -6,6 +6,7 @@ import { Trash2 } from "lucide-react";
 import {
   DASHBOARD_KPIS,
   DEFAULT_DASHBOARD_PREFERENCES,
+  getDashboardGridPositions,
   mergeDashboardPreferences,
 } from "@/pages/dashboardPreferences";
 
@@ -89,7 +90,7 @@ function ThemeSection({ theme, applyTheme, onSave, onReset }) {
         {theme.card_header_metallic && (
           <>
             <div className="grid sm:grid-cols-2 gap-3">
-              {[["card_header_gradient_start", "Cor inicial"], ["card_header_gradient_end", "Cor final"]].map(([key, label]) => (
+              {[["card_header_gradient_start", "Cor inicial"], ["card_header_gradient_middle", "Tom metálico intermediário"], ["card_header_gradient_end", "Cor final"]].map(([key, label]) => (
                 <label key={key} className="flex items-center gap-3">
                   <input
                     type="color"
@@ -106,7 +107,7 @@ function ThemeSection({ theme, applyTheme, onSave, onReset }) {
             <div
               className="h-10 rounded border"
               style={{
-                background: `linear-gradient(115deg, ${theme.card_header_gradient_start} 0%, color-mix(in srgb, ${theme.card_header_gradient_start} 65%, white) 18%, ${theme.card_header_gradient_end} 40%, color-mix(in srgb, ${theme.card_header_gradient_end} 40%, white) 52%, ${theme.card_header_gradient_start} 72%, ${theme.card_header_gradient_end} 100%)`,
+                background: `linear-gradient(115deg, ${theme.card_header_gradient_start} 0%, color-mix(in srgb, ${theme.card_header_gradient_start} 65%, ${theme.card_header_gradient_middle}) 18%, ${theme.card_header_gradient_end} 40%, color-mix(in srgb, ${theme.card_header_gradient_end} 40%, ${theme.card_header_gradient_middle}) 52%, ${theme.card_header_gradient_start} 72%, ${theme.card_header_gradient_end} 100%)`,
               }}
               aria-label="Prévia do degradê metálico"
               data-testid="metallic-header-gradient-preview"
@@ -138,6 +139,8 @@ function DashboardSection({ categories, initialPreferences, onSave, onChange }) 
     ...preferences.order.filter((id) => itemIds.includes(id)),
     ...itemIds.filter((id) => !preferences.order.includes(id)),
   ];
+  const positionableItemIds = itemIds.filter((id) => id !== "chart");
+  const gridPositions = getDashboardGridPositions(order, positionableItemIds, preferences.grid_positions);
 
   useEffect(() => {
     setPreferences(mergeDashboardPreferences(initialPreferences));
@@ -154,14 +157,35 @@ function DashboardSection({ categories, initialPreferences, onSave, onChange }) 
     if (target < 0 || target >= order.length) return;
     const next = [...order];
     [next[index], next[target]] = [next[target], next[index]];
-    update({ order: next });
+    const nextGridPositions = { ...gridPositions };
+    if (id !== "chart" && next[target] !== "chart") {
+      [nextGridPositions[id], nextGridPositions[next[target]]] = [nextGridPositions[next[target]], nextGridPositions[id]];
+    }
+    update({ order: next, grid_positions: nextGridPositions });
+  };
+  const moveToGridPosition = (id, field, value) => {
+    const current = gridPositions[id];
+    const target = { ...current, [field]: Number(value) };
+    const occupant = Object.entries(gridPositions).find(([otherId, position]) =>
+      otherId !== id && position.row === target.row && position.column === target.column,
+    )?.[0];
+    const nextGridPositions = { ...gridPositions, [id]: target };
+    if (occupant) nextGridPositions[occupant] = current;
+    const nextOrder = [...order].sort((firstId, secondId) => {
+      if (firstId === "chart") return 1;
+      if (secondId === "chart") return -1;
+      const first = nextGridPositions[firstId];
+      const second = nextGridPositions[secondId];
+      return first.row - second.row || first.column - second.column;
+    });
+    update({ order: nextOrder, grid_positions: nextGridPositions });
   };
 
   return (
     <section className="lokal-panel p-4 space-y-4" data-testid="dashboard-customization">
       <div>
         <h2 className="lokal-stencil text-sm mb-1">Personalizar dashboard</h2>
-        <p className="text-xs text-neutral-500">Escolha os cartões visíveis, organize a ordem e ajuste o gráfico. As cores do Dashboard acompanham a aparência global do sistema.</p>
+        <p className="text-xs text-neutral-500">Escolha os cartões visíveis, organize a posição na grade e ajuste o gráfico. Em telas menores, a posição se adapta à largura disponível.</p>
       </div>
 
       <div>
@@ -179,12 +203,57 @@ function DashboardSection({ categories, initialPreferences, onSave, onChange }) 
                 data-testid={`dashboard-visible-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
               />
               <span className="flex-1 text-sm">{dashboardItemLabel(id, categories)}</span>
+              {id !== "chart" && (
+                <>
+                  <label className="text-xs">
+                    Linha
+                    <select
+                      className="lm-input ml-1 w-16 px-1 py-1"
+                      value={gridPositions[id].row}
+                      onChange={(event) => moveToGridPosition(id, "row", event.target.value)}
+                      aria-label={`Linha de ${dashboardItemLabel(id, categories)}`}
+                      data-testid={`dashboard-row-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+                    >
+                      {Array.from({ length: positionableItemIds.length }, (_, row) => row + 1).map((row) => (
+                        <option key={row} value={row}>{row}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs">
+                    Coluna
+                    <select
+                      className="lm-input ml-1 w-16 px-1 py-1"
+                      value={gridPositions[id].column}
+                      onChange={(event) => moveToGridPosition(id, "column", event.target.value)}
+                      aria-label={`Coluna de ${dashboardItemLabel(id, categories)}`}
+                      data-testid={`dashboard-column-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+                    >
+                      {[1, 2, 3, 4].map((column) => <option key={column} value={column}>{column}</option>)}
+                    </select>
+                  </label>
+                </>
+              )}
               <button className="lm-btn lm-btn-outline px-2 py-1" onClick={() => move(id, -1)} disabled={index === 0} aria-label={`Mover ${dashboardItemLabel(id, categories)} para cima`}>↑</button>
               <button className="lm-btn lm-btn-outline px-2 py-1" onClick={() => move(id, 1)} disabled={index === order.length - 1} aria-label={`Mover ${dashboardItemLabel(id, categories)} para baixo`}>↓</button>
             </div>
           ))}
         </div>
       </div>
+
+      <label className="flex items-center gap-3 text-sm">
+        <input
+          type="color"
+          value={preferences.colors.card_text}
+          onChange={(event) => update({
+            card_text_customized: true,
+            colors: { ...preferences.colors, card_text: event.target.value },
+          })}
+          className="w-12 h-10 border rounded cursor-pointer"
+          aria-label="Cor do texto dos cartões do Dashboard"
+          data-testid="dashboard-card-text-color"
+        />
+        Cor do texto dos cartões do Dashboard
+      </label>
 
       <div className="grid md:grid-cols-2 gap-3">
         <label className="text-sm">Tipo de gráfico
