@@ -12,6 +12,7 @@ import bcrypt
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -928,6 +929,14 @@ async def _current_order_number() -> int:
         int((latest_order or {}).get("number") or 0),
     )
 
+async def _rollback_order_number_if_latest(order: dict) -> None:
+    number = int(order.get("number") or 0)
+    if number > 0:
+        await db.counters.update_one(
+            {"_id": "orders", "seq": number},
+            {"$inc": {"seq": -1}},
+        )
+
 @api.get("/orders/number-sequence")
 async def get_order_number_sequence(user: dict = Depends(require_admin)):
     return {"current_number": await _current_order_number()}
@@ -1166,6 +1175,7 @@ async def delete_order(oid: str, user: dict = Depends(get_current_user)):
         await db.expenses.delete_many({"order_id": oid, "type": "VIAGEM"})
     await db.orders.delete_one({"id": oid})
     await db.commissions.delete_many({"order_id": oid})
+    await _rollback_order_number_if_latest(order)
     return {"deleted": 1}
 
 # ---------- Commissions ----------
@@ -1220,6 +1230,79 @@ async def update_settings(payload: dict, user: dict = Depends(get_current_user))
     return await db.settings.find_one({"id": "singleton"}, {"_id": 0})
 
 # ---------- Dashboard summary ----------
+BUSINESS_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+def _business_date(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    raw = str(value)
+    if len(raw) == 10:
+        return raw
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=BUSINESS_TIMEZONE)
+        return parsed.astimezone(BUSINESS_TIMEZONE).date().isoformat()
+    except ValueError:
+        return raw[:10]
+
+@api.post("/dashboard/close-day")
+async def close_dashboard_day(user: dict = Depends(require_admin)):
+    day = datetime.now(BUSINESS_TIMEZONE).date().isoformat()
+    existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
+    if existing:
+        existing["already_closed"] = True
+        return existing
+
+    stock_movements = await db.stock_movements.find({}, {"_id": 0}).to_list(10000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(5000)
+    day_movements = [movement for movement in stock_movements if _business_date(movement.get("created_at")) == day]
+    day_expenses = [expense for expense in expenses if _business_date(expense.get("date")) == day]
+    related_order_ids = {
+        movement.get("order_id") for movement in day_movements if movement.get("order_id")
+    }
+    related_order_ids.update(
+        expense.get("order_id") for expense in day_expenses if expense.get("order_id")
+    )
+    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    day_orders = [
+        order for order in orders
+        if _business_date(order.get("created_at")) == day or order.get("id") in related_order_ids
+    ]
+    order_total = sum(float(order.get("total") or 0) for order in day_orders)
+    expense_total = sum(
+        float(expense.get("amount") or 0)
+        + float(expense.get("fuel_cost") or 0)
+        + float(expense.get("toll_cost") or 0)
+        for expense in day_expenses
+    )
+    report = {
+        "id": new_id(),
+        "date": day,
+        "closed_at": now_iso(),
+        "closed_by": user.get("name") or user.get("email") or "Administrador",
+        "already_closed": False,
+        "summary": {
+            "orders_count": len(day_orders),
+            "orders_total": order_total,
+            "stock_movements_count": len(day_movements),
+            "expenses_count": len(day_expenses),
+            "expenses_total": expense_total,
+        },
+        "orders": day_orders,
+        "stock_movements": day_movements,
+        "expenses": day_expenses,
+    }
+    try:
+        await db.day_closures.insert_one(report.copy())
+    except DuplicateKeyError:
+        existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
+        if not existing:
+            raise
+        existing["already_closed"] = True
+        return existing
+    return report
+
 @api.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7, ge=7, le=30)):
     products = await db.products.find({}, {"_id": 0}).to_list(5000)
@@ -1322,6 +1405,7 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.products.create_index("sku")
     await db.orders.create_index("number")
+    await db.day_closures.create_index("date", unique=True)
     logger.info("LOKAL MILITAR API started.")
 
 @app.on_event("shutdown")

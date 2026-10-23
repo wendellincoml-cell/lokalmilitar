@@ -272,6 +272,35 @@ def test_order_number_sequence_is_admin_configurable_without_decreasing(admin):
     assert invalid.status_code == 422
 
 
+def test_deleting_latest_order_reuses_its_number(admin):
+    current_number = admin.get(f"{BASE_URL}/api/orders/number-sequence").json()["current_number"]
+
+    order = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Numeração", "items": [], "status": "Orçamento"},
+    )
+    assert order.status_code == 200, order.text
+    CREATED["orders"].append(order.json()["id"])
+    order_number = order.json()["number"]
+    assert order_number == current_number + 1
+
+    deleted = admin.delete(f"{BASE_URL}/api/orders/{order.json()['id']}")
+    assert deleted.status_code == 200, deleted.text
+    assert admin.get(f"{BASE_URL}/api/orders/number-sequence").json()["current_number"] == current_number
+
+    replacement = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Numeração", "items": [], "status": "Orçamento"},
+    )
+    assert replacement.status_code == 200, replacement.text
+    CREATED["orders"].append(replacement.json()["id"])
+    assert replacement.json()["number"] == order_number
+
+    deleted_replacement = admin.delete(f"{BASE_URL}/api/orders/{replacement.json()['id']}")
+    assert deleted_replacement.status_code == 200, deleted_replacement.text
+    assert admin.get(f"{BASE_URL}/api/orders/number-sequence").json()["current_number"] == current_number
+
+
 def test_dashboard(admin):
     r = admin.get(f"{BASE_URL}/api/dashboard")
     assert r.status_code == 200

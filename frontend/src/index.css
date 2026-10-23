@@ -170,7 +170,7 @@ h1, h2, h3 { color: var(--title-color); }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: .72rem; font-weight: 600; font-family: var(--font-head); text-transform: uppercase; letter-spacing: .03em; }
 
 /* Sidebar */
-.lokal-sidebar { background: var(--sidebar-bg); color: var(--sidebar-text); border-right: 1px solid var(--line); }
+.lokal-sidebar { background: var(--sidebar-bg); color: var(--sidebar-text); }
 .lokal-sidebar a { border-left: 3px solid transparent; font-family: var(--font-head); text-transform: uppercase; letter-spacing: .04em; font-weight: 400; transition: background-color 120ms ease, border-color 120ms ease; }
 .lokal-sidebar a:hover { background: #1c1c1c; border-left-color: var(--khaki); }
 .lokal-sidebar a.active { background: var(--olive); color: var(--button-text); border-left-color: var(--gold); }

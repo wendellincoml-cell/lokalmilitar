@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatBRL, formatDate } from "@/lib/api";
 import { toast } from "sonner";
-import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink } from "lucide-react";
+import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink, Plus } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const KIND_STYLE = {
@@ -11,6 +11,7 @@ const KIND_STYLE = {
 };
 const KIND_LABEL = { DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)" };
 const BLANK = { product_id: "", size: "", qty: 1, nf: "", reason: "", kind: "ENTRADA" };
+const BLANK_ENTRY_ITEM = { product_id: "", size: "", qty: 1 };
 
 const openPrint = (title, rows, totals) => {
   const w = window.open("", "_blank");
@@ -35,9 +36,11 @@ export default function Stock() {
   const [tab, setTab] = useState("posicao");
   const [q, setQ] = useState("");
   const [cat, setCat] = useState(params.get("cat") || "");
+  const [subcategory, setSubcategory] = useState("");
   const [onlyLow, setOnlyLow] = useState(params.get("low") === "1");
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(BLANK);
+  const [entryItems, setEntryItems] = useState([BLANK_ENTRY_ITEM]);
 
   const load = async () => {
     const [p, m, c, o] = await Promise.all([api.get("/products"), api.get("/stock_movements"), api.get("/categories"), api.get("/orders")]);
@@ -46,11 +49,16 @@ export default function Stock() {
   useEffect(() => { load(); }, []);
 
   const catMap = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c.name])), [categories]);
+  const topCategories = useMemo(() => categories.filter((category) => !category.parent_id), [categories]);
+  const subcategories = useMemo(
+    () => categories.filter((category) => category.parent_id && (!cat || topCategories.find((parent) => parent.name === cat)?.id === category.parent_id)),
+    [categories, cat, topCategories],
+  );
   const allRows = useMemo(() => products.flatMap((p) => (p.sizes || []).map((s) => ({
-    id: p.id + s.size, sku: p.sku, name: p.name, cat: catMap[p.category_id] || "-", size: s.size, stock: Number(s.stock || 0),
+    id: p.id + s.size, sku: p.sku, name: p.name, cat: catMap[p.category_id] || "-", subcategory_id: p.subcategory_id || "", subcategory: catMap[p.subcategory_id] || "", size: s.size, stock: Number(s.stock || 0),
     min: Number(s.stock_min || 0), cost: p.cost, price: p.price, shelf: p.shelf,
   }))), [products, catMap]);
-  const rows = allRows.filter((r) => (!cat || r.cat === cat) && (!onlyLow || (r.min > 0 && r.stock <= r.min))
+  const rows = allRows.filter((r) => (!cat || r.cat === cat) && (!subcategory || r.subcategory_id === subcategory) && (!onlyLow || (r.min > 0 && r.stock <= r.min))
     && (!q || (r.name + r.sku + r.size).toLowerCase().includes(q.toLowerCase())));
   const totals = (list) => ({ items: list.reduce((s, r) => s + r.stock, 0), value: list.reduce((s, r) => s + r.stock * Number(r.price || 0), 0) });
   const all = totals(allRows);
@@ -70,6 +78,38 @@ export default function Stock() {
 
   const product = products.find((p) => p.id === form.product_id);
   const submit = async () => {
+    if (modal === "in") {
+      const invalidIndex = entryItems.findIndex((item) => (
+        !item.product_id || !item.size || !Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0
+      ));
+      if (invalidIndex >= 0) return toast.error(`Preencha produto, tamanho e quantidade do item ${invalidIndex + 1}`);
+
+      for (let index = 0; index < entryItems.length; index += 1) {
+        const item = entryItems[index];
+        const itemProduct = products.find((p) => p.id === item.product_id);
+        try {
+          await api.post("/stock_movements", {
+            ...item,
+            nf: form.nf,
+            reason: form.reason,
+            kind: "ENTRADA",
+            product_name: itemProduct?.name,
+            sku: itemProduct?.sku,
+          });
+        } catch (error) {
+          const remainingItems = entryItems.slice(index);
+          setEntryItems(remainingItems);
+          toast.error(
+            `Não foi possível registrar o item ${index + 1}. ${index > 0 ? `${index} entrada(s) já foram registradas. ` : ""}${error.response?.data?.detail || "Revise os itens restantes e tente novamente."}`,
+          );
+          return;
+        }
+      }
+
+      toast.success(`${entryItems.length} entrada(s) de estoque registrada(s)`);
+      setModal(null); setForm(BLANK); setEntryItems([BLANK_ENTRY_ITEM]); load();
+      return;
+    }
     if (!form.product_id || !form.size || !form.qty) return toast.error("Produto, tamanho e quantidade são obrigatórios");
     await api.post("/stock_movements", { ...form, product_name: product?.name, sku: product?.sku });
     toast.success(form.kind === "ENTRADA" ? "Entrada registrada" : "Saída registrada");
@@ -90,14 +130,37 @@ export default function Stock() {
     if (!order) return toast.error("Pedido relacionado não encontrado");
     window.open(`/pedidos?printOrder=${encodeURIComponent(orderId)}`, "_blank", "noopener,noreferrer");
   };
-  const movs = movements.filter((m) => !q || (m.product_name + (m.reason || "") + (m.sku || "")).toLowerCase().includes(q.toLowerCase()));
+  const movs = useMemo(() => {
+    const filtered = movements.filter((movement) => (
+      !q || (movement.product_name + (movement.reason || "") + (movement.sku || "")).toLowerCase().includes(q.toLowerCase())
+    ));
+    const grouped = new Map();
+
+    filtered.forEach((movement) => {
+      const isOrderDismantling = movement.order_id
+        && ["DESMONTAGEM_SAIDA", "DESMONTAGEM_ENTRADA"].includes(movement.kind);
+      const key = isOrderDismantling
+        ? JSON.stringify([movement.order_id, movement.product_id, movement.size, movement.kind, movement.reason])
+        : movement.id;
+      const existing = grouped.get(key);
+
+      if (existing) {
+        existing.qty += Number(movement.qty || 0);
+        existing.groupedCount += 1;
+      } else {
+        grouped.set(key, { ...movement, qty: Number(movement.qty || 0), groupedCount: 1 });
+      }
+    });
+
+    return [...grouped.values()];
+  }, [movements, q]);
 
   return (
     <div data-testid="stock-page">
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
         <div><h1>Estoque — Entrada / Saída</h1><p>{all.items} itens · {formatBRL(all.value)} em valor de venda</p></div>
         <div className="flex gap-2">
-          <button className="lm-btn lm-btn-olive" onClick={() => { setForm({ ...BLANK, kind: "ENTRADA" }); setModal("in"); }} data-testid="btn-entry"><Download size={16} />Entrada (NF)</button>
+          <button className="lm-btn lm-btn-olive" onClick={() => { setForm({ ...BLANK, kind: "ENTRADA" }); setEntryItems([BLANK_ENTRY_ITEM]); setModal("in"); }} data-testid="btn-entry"><Download size={16} />Entrada (NF)</button>
           <button className="lm-btn lm-btn-red" onClick={() => { setForm({ ...BLANK, kind: "SAIDA" }); setModal("out"); }} data-testid="btn-exit"><Upload size={16} />Saída / Avaria</button>
         </div>
       </div>
@@ -116,8 +179,11 @@ export default function Stock() {
         </div>
         <div className="relative flex-1 min-w-[200px]"><Search size={15} className="absolute left-3 top-3 text-neutral-400" />
           <input className="lm-input pl-9 h-full" placeholder="Buscar..." value={q} onChange={(e) => setQ(e.target.value)} data-testid="stock-search" /></div>
-        <select className="lm-input !w-56" value={cat} onChange={(e) => setCat(e.target.value)} data-testid="stock-cat-filter">
-          <option value="">Todas categorias</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+        <select className="lm-input !w-56" value={cat} onChange={(e) => { setCat(e.target.value); setSubcategory(""); }} data-testid="stock-cat-filter">
+          <option value="">Todas categorias</option>{topCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+        </select>
+        <select className="lm-input !w-56" value={subcategory} onChange={(e) => setSubcategory(e.target.value)} data-testid="stock-subcategory-filter">
+          <option value="">Todas subcategorias</option>{subcategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <label className="lm-btn lm-btn-outline cursor-pointer"><input type="checkbox" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} data-testid="stock-only-low" />Só estoque baixo</label>
       </div>
@@ -147,7 +213,8 @@ export default function Stock() {
                   <td className="text-xs whitespace-nowrap">{formatDate(m.created_at)}</td>
                   <td><span className={`badge ${KIND_STYLE[m.kind] || "bg-neutral-200"}`}>{KIND_LABEL[m.kind] || m.kind}</span></td>
                   <td className="font-head">{m.product_name}{m.order_id && <button className="ml-2 inline-flex items-center gap-1 text-xs underline" onClick={() => printOrder(m.order_id)} title="Abrir impressão A4 do pedido"><ExternalLink size={12} />Pedido #{orders.find((o) => o.id === m.order_id)?.number || ""}</button>}</td>
-                  <td><span className="chip">{m.size}</span></td><td>{m.qty}</td>
+                  <td><span className="chip">{m.size}</span></td>
+                  <td>{m.qty}{m.groupedCount > 1 && <div className="text-xs text-neutral-500">{m.groupedCount} movimentações</div>}</td>
                   <td className="text-sm">{m.reason}</td><td>{m.nf}</td>
                   <td>{!m.order_id && <button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)} aria-label="Excluir movimentação e estornar estoque"><Trash2 size={14} /></button>}</td>
                 </tr>
@@ -162,13 +229,49 @@ export default function Stock() {
         <DialogContent data-testid="stock-modal">
           <DialogHeader><DialogTitle className="font-head">{modal === "in" ? "Entrada por NF" : "Saída / Avaria"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <select className="lm-input" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value, size: "" })} data-testid="mov-product">
-              <option value="">— Produto —</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
-            </select>
-            <select className="lm-input" value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} data-testid="mov-size">
-              <option value="">— Tamanho —</option>{(product?.sizes || []).map((s) => <option key={s.size} value={s.size}>{s.size} (atual {s.stock})</option>)}
-            </select>
-            <input className="lm-input" type="number" min="1" placeholder="Quantidade" value={form.qty} onChange={(e) => setForm({ ...form, qty: Number(e.target.value) })} data-testid="mov-qty" />
+            {modal === "in" ? (
+              <>
+                <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-1">
+                  {entryItems.map((item, index) => {
+                    const itemProduct = products.find((p) => p.id === item.product_id);
+                    return (
+                      <div key={index} className="border rounded p-3 space-y-2" data-testid={`entry-item-${index}`}>
+                        <div className="flex items-center justify-between">
+                          <span className="font-head text-sm">Produto {index + 1}</span>
+                          {entryItems.length > 1 && (
+                            <button type="button" className="p-1 text-red-700 hover:bg-red-100 rounded" onClick={() => setEntryItems(entryItems.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover produto ${index + 1}`} data-testid={`remove-entry-item-${index}`}>
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
+                        <select className="lm-input" value={item.product_id} onChange={(e) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, product_id: e.target.value, size: "" } : entry))} data-testid={index === 0 ? "mov-product" : `mov-product-${index}`}>
+                          <option value="">— Produto —</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
+                        </select>
+                        <div className="grid grid-cols-[1fr_120px] gap-2">
+                          <select className="lm-input" value={item.size} onChange={(e) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, size: e.target.value } : entry))} data-testid={index === 0 ? "mov-size" : `mov-size-${index}`}>
+                            <option value="">— Tamanho —</option>{(itemProduct?.sizes || []).map((s) => <option key={s.size} value={s.size}>{s.size} (atual {s.stock})</option>)}
+                          </select>
+                          <input className="lm-input" type="number" min="0.01" step="any" placeholder="Quantidade" value={item.qty} onChange={(e) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, qty: e.target.value } : entry))} data-testid={index === 0 ? "mov-qty" : `mov-qty-${index}`} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button type="button" className="lm-btn lm-btn-outline w-full justify-center" onClick={() => setEntryItems([...entryItems, { ...BLANK_ENTRY_ITEM }])} data-testid="add-entry-item">
+                  <Plus size={16} />Adicionar outro produto
+                </button>
+              </>
+            ) : (
+              <>
+                <select className="lm-input" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value, size: "" })} data-testid="mov-product">
+                  <option value="">— Produto —</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
+                </select>
+                <select className="lm-input" value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} data-testid="mov-size">
+                  <option value="">— Tamanho —</option>{(product?.sizes || []).map((s) => <option key={s.size} value={s.size}>{s.size} (atual {s.stock})</option>)}
+                </select>
+                <input className="lm-input" type="number" min="1" placeholder="Quantidade" value={form.qty} onChange={(e) => setForm({ ...form, qty: Number(e.target.value) })} data-testid="mov-qty" />
+              </>
+            )}
             {modal === "in" && <input className="lm-input" placeholder="Número da NF" value={form.nf} onChange={(e) => setForm({ ...form, nf: e.target.value })} data-testid="mov-nf" />}
             {modal === "out" && (
               <select className="lm-input" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} data-testid="mov-kind">

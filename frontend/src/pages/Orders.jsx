@@ -68,6 +68,30 @@ export default function Orders({ mode }) {
     const items = [...e.items]; items[i] = { ...items[i], ...patch }; return { ...e, items };
   });
   const addReturnItem = (key) => setEditing(e => ({ ...e, [key]:[...(e[key]||[]), { product_id:"", name:"", size:"", qty:1, reason:"" }] }));
+  const dismantlingInfo = (item, index) => {
+    if (!editing || editing.id || editing.type !== "VENDA" || !item.product_id || !item.size) return null;
+    const matchingItems = editing.items
+      .map((orderItem, itemIndex) => ({ ...orderItem, itemIndex }))
+      .filter((orderItem) => orderItem.product_id === item.product_id && orderItem.size === item.size);
+    if (matchingItems[matchingItems.length - 1]?.itemIndex !== index) return null;
+
+    const product = prodById[item.product_id];
+    const availableStock = Number(product?.sizes?.find((size) => size.size === item.size)?.stock || 0);
+    const requestedQuantity = matchingItems.reduce((total, orderItem) => total + Number(orderItem.qty || 0), 0);
+    const shortage = Math.max(requestedQuantity - availableStock, 0);
+    if (!shortage) return null;
+
+    const parentProducts = products
+      .filter((candidate) => (candidate.linked_ids || []).includes(item.product_id))
+      .map((parent) => ({
+        name: parent.name,
+        stock: Number(parent.sizes?.find((size) => size.size === item.size)?.stock || 0),
+      }))
+      .filter((parent) => parent.stock > 0);
+    const dismantlableQuantity = parentProducts.reduce((total, parent) => total + parent.stock, 0);
+
+    return { shortage, parentProducts, dismantlableQuantity };
+  };
 
   const save = async () => {
     try {
@@ -405,7 +429,22 @@ export default function Orders({ mode }) {
                     </label>
                     <div className="col-span-2 sm:col-span-2 text-xs text-right" aria-label={`Subtotal do item ${i + 1}`}>Subtotal: {formatBRL(it.qty*it.unit_price)}</div>
                     <button type="button" className="col-span-2 sm:col-span-1 text-red-700" onClick={()=>setEditing({...editing, items:editing.items.filter((_,x)=>x!==i)})} aria-label={`Remover item ${i + 1}`}>×</button>
-                  </div>
+                      {(() => {
+                        const info = dismantlingInfo(it, i);
+                        if (!info) return null;
+                        const canCoverShortage = info.dismantlableQuantity >= info.shortage;
+                        return (
+                          <div className={`col-span-4 sm:col-span-15 border p-2 text-xs ${canCoverShortage ? "border-amber-300 bg-amber-50 text-amber-900" : "border-red-300 bg-red-50 text-red-900"}`} role="status" data-testid={`dismantling-warning-${i}`}>
+                            Estoque insuficiente: faltam {info.shortage} unidade(s) de {it.name} tamanho {it.size}.
+                            {info.parentProducts.length > 0
+                              ? ` Será necessário desmontar ${info.shortage} unidade(s) de ${info.parentProducts.map((parent) => `${parent.name} (${parent.stock} disponível(is))`).join(", ")}.`
+                              : " Não há produtos vinculados disponíveis para desmontagem nesse tamanho."}
+                            {!canCoverShortage && info.parentProducts.length > 0 && ` A desmontagem disponível cobre apenas ${info.dismantlableQuantity} unidade(s).`}
+                            {" "}A desmontagem será feita ao concluir a entrega ou retirada.
+                          </div>
+                        );
+                      })()}
+                    </div>
                 ))}
               </div>
 
