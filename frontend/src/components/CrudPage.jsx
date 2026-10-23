@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit }) => {
+export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -50,6 +50,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
           <Plus size={14} /> Novo
         </button>
       </header>
+      {headerContent}
       <input placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)}
         className="lm-input md:!w-80 mb-3" data-testid={`${testid}-search`} />
       <div className="lm-table-wrap overflow-x-auto">

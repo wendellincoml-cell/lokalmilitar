@@ -249,9 +249,8 @@ export function Viagens() {
       toast.error(error.response?.data?.detail || "Não foi possível gerar o relatório de percursos");
     }
   };
-  return (
-    <>
-      <section className="lokal-panel p-3 mb-3 flex flex-wrap items-end gap-3" data-testid="travel-report-filters">
+  const travelReportFilters = (
+    <section className="lokal-panel p-3 my-3 flex flex-wrap items-end gap-3" data-testid="travel-report-filters">
         <div className="font-head text-sm">Relatório de percursos</div>
         <label className="text-xs font-mono">
           Período
@@ -289,7 +288,10 @@ export function Viagens() {
           Imprimir relatório de percursos
         </button>
       </section>
+  );
+  return (
       <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
+      headerContent={travelReportFilters}
       filter={(r) => r.type === "VIAGEM"} prepareEdit={prepareTripEdit}
       defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: FUEL_TYPES[0], fuel_price_per_liter: Number(fuelPrices[FUEL_TYPES[0]] || 0), date: new Date().toISOString().slice(0, 10) }}
       fields={[
@@ -329,7 +331,6 @@ export function Viagens() {
         { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)) },
       ]}
       footer={(rows) => sumBox("Total em viagens", total(rows, (r) => Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)))} />
-    </>
   );
 }
 
