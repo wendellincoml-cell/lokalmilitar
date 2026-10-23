@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer } from "lucide-react";
+import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -89,6 +89,10 @@ export default function Dashboard() {
   const [vehicles, setVehicles] = useState([]);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [currentOdometer, setCurrentOdometer] = useState("");
+  const [closureHistoryOpen, setClosureHistoryOpen] = useState(false);
+  const [closureHistory, setClosureHistory] = useState([]);
+  const [selectedClosureDate, setSelectedClosureDate] = useState("");
+  const [loadingClosureHistory, setLoadingClosureHistory] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
   const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
   const textColor = dashboardPreferences.card_text_customized ? dashboardPreferences.colors.card_text : null;
@@ -147,6 +151,37 @@ export default function Dashboard() {
       toast.error(closeError.response?.data?.detail || "Não foi possível finalizar o dia");
     } finally {
       setClosingDay(false);
+    }
+  };
+
+  const openClosureHistory = async () => {
+    setLoadingClosureHistory(true);
+    try {
+      const { data: history } = await api.get("/dashboard/closures");
+      setClosureHistory(history);
+      setSelectedClosureDate(history[0]?.date || "");
+      setClosureHistoryOpen(true);
+    } catch (historyError) {
+      toast.error(historyError.response?.data?.detail || "Não foi possível carregar os fechamentos anteriores");
+    } finally {
+      setLoadingClosureHistory(false);
+    }
+  };
+
+  const showSelectedClosure = async () => {
+    if (!selectedClosureDate) {
+      toast.error("Selecione um dia registrado");
+      return;
+    }
+    setLoadingClosureHistory(true);
+    try {
+      const { data: report } = await api.get(`/dashboard/closures/${selectedClosureDate}`);
+      setClosureHistoryOpen(false);
+      setClosureReport(report);
+    } catch (historyError) {
+      toast.error(historyError.response?.data?.detail || "Não foi possível carregar o fechamento selecionado");
+    } finally {
+      setLoadingClosureHistory(false);
     }
   };
 
@@ -218,14 +253,59 @@ export default function Dashboard() {
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
         <div><h1 style={{ color: "var(--title-color)" }}>Dashboard</h1><p>Visão geral da operação · {new Date().toLocaleDateString("pt-BR")}</p></div>
         {isAdmin && (
-          <button className="lm-btn lm-btn-olive" onClick={openCloseDayDialog} disabled={closingDay} data-testid="close-day">
-            <ClipboardCheck size={16} />{closingDay ? "FINALIZANDO..." : "FINALIZAR DIA"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="lm-btn lm-btn-dark" onClick={openClosureHistory} disabled={loadingClosureHistory} data-testid="view-day-closures">
+              <CalendarDays size={16} />{loadingClosureHistory ? "CARREGANDO..." : "DIAS ANTERIORES"}
+            </button>
+            <button className="lm-btn lm-btn-olive" onClick={openCloseDayDialog} disabled={closingDay} data-testid="close-day">
+              <ClipboardCheck size={16} />{closingDay ? "FINALIZANDO..." : "FINALIZAR DIA"}
+            </button>
+          </div>
         )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {displayOrder.filter((id) => visibility[id] !== false).map(renderItem)}
       </div>
+      <Dialog open={closureHistoryOpen} onOpenChange={(isOpen) => !loadingClosureHistory && setClosureHistoryOpen(isOpen)}>
+        <DialogContent data-testid="day-closure-history">
+          <DialogHeader>
+            <DialogTitle className="font-head">Fechamentos anteriores</DialogTitle>
+          </DialogHeader>
+          {closureHistory.length > 0 ? (
+            <div className="space-y-4">
+              <label className="block text-sm font-medium" htmlFor="day-closure-date">Selecione o dia registrado</label>
+              <select
+                id="day-closure-date"
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                value={selectedClosureDate}
+                onChange={(event) => setSelectedClosureDate(event.target.value)}
+                data-testid="day-closure-date"
+              >
+                {closureHistory.map((closure) => (
+                  <option key={closure.date} value={closure.date}>
+                    {closure.date.split("-").reverse().join("/")} · {closure.closed_by}
+                  </option>
+                ))}
+              </select>
+              <div className="flex justify-end gap-2">
+                <button className="lm-btn lm-btn-dark" onClick={() => setClosureHistoryOpen(false)} disabled={loadingClosureHistory}>
+                  Fechar
+                </button>
+                <button className="lm-btn lm-btn-olive" onClick={showSelectedClosure} disabled={loadingClosureHistory} data-testid="show-selected-day-closure">
+                  {loadingClosureHistory ? "CARREGANDO..." : "Visualizar e imprimir"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-neutral-600">Ainda não há fechamentos registrados.</p>
+              <div className="flex justify-end">
+                <button className="lm-btn lm-btn-dark" onClick={() => setClosureHistoryOpen(false)}>Fechar</button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={closeDayDialogOpen} onOpenChange={(isOpen) => !closingDay && setCloseDayDialogOpen(isOpen)}>
         <DialogContent data-testid="close-day-dialog">
           <DialogHeader>

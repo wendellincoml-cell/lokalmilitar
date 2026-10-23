@@ -349,3 +349,9 @@ def test_day_close_is_saved_and_idempotent(admin):
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()["id"] == report["id"]
     assert repeated.json()["already_closed"] is True
+    history = admin.get(f"{BASE_URL}/api/dashboard/closures")
+    assert history.status_code == 200, history.text
+    assert any(closure["date"] == report["date"] for closure in history.json())
+    saved_report = admin.get(f"{BASE_URL}/api/dashboard/closures/{report['date']}")
+    assert saved_report.status_code == 200, saved_report.text
+    assert saved_report.json()["id"] == report["id"]

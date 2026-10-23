@@ -1419,6 +1419,20 @@ def _business_date(value: Any) -> Optional[str]:
     except ValueError:
         return raw[:10]
 
+@api.get("/dashboard/closures")
+async def list_day_closures(user: dict = Depends(require_admin)):
+    closures = await db.day_closures.find(
+        {}, {"_id": 0, "date": 1, "closed_at": 1, "closed_by": 1, "summary": 1}
+    ).sort("date", -1).to_list(1000)
+    return closures
+
+@api.get("/dashboard/closures/{day}")
+async def get_day_closure(day: str, user: dict = Depends(require_admin)):
+    closure = await db.day_closures.find_one({"date": day}, {"_id": 0})
+    if not closure:
+        raise HTTPException(404, "Fechamento não encontrado")
+    return closure
+
 @api.post("/dashboard/close-day")
 async def close_dashboard_day(
     payload: Optional[DayClosureInput] = Body(default=None),
