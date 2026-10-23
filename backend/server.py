@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header, Body
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -503,6 +503,7 @@ class Expense(BaseModel):
     fuel_liters: float = 0
     fuel_price_per_liter: float = 0
     km: float = 0
+    odometer_km: Optional[float] = None
     route: Optional[str] = None
     # Manutencao
     plate: Optional[str] = None
@@ -523,6 +524,10 @@ class Commission(BaseModel):
 
 class OrderNumberSequenceUpdate(BaseModel):
     current_number: int = Field(ge=0)
+
+class DayClosureInput(BaseModel):
+    vehicle_id: str
+    current_km: float = Field(ge=0)
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1415,12 +1420,44 @@ def _business_date(value: Any) -> Optional[str]:
         return raw[:10]
 
 @api.post("/dashboard/close-day")
-async def close_dashboard_day(user: dict = Depends(require_admin)):
+async def close_dashboard_day(
+    payload: Optional[DayClosureInput] = Body(default=None),
+    user: dict = Depends(require_admin),
+):
     day = datetime.now(BUSINESS_TIMEZONE).date().isoformat()
     existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
     if existing:
         existing["already_closed"] = True
         return existing
+
+    if payload:
+        vehicle = await db.vehicles.find_one(
+            {"id": payload.vehicle_id, "active": {"$ne": False}}, {"_id": 0}
+        )
+        if not vehicle:
+            raise HTTPException(400, "Veículo não encontrado ou inativo")
+        previous_km = float(vehicle.get("current_km") or 0)
+        if payload.current_km < previous_km:
+            raise HTTPException(
+                400,
+                f"A quilometragem informada não pode ser menor que a registrada ({previous_km:g} km)",
+            )
+        trip = Expense(
+            type="VIAGEM",
+            description="Quilometragem fora das entregas",
+            date=day,
+            vehicle_id=vehicle["id"],
+            vehicle_name=vehicle["name"],
+            km=payload.current_km - previous_km,
+            odometer_km=payload.current_km,
+            route="Registro de quilometragem no fechamento do dia",
+            avg_consumption=float(vehicle.get("avg_consumption") or 0),
+        ).model_dump()
+        trip = await _prepare_trip(trip)
+        await db.expenses.insert_one(trip)
+        await _change_vehicle_km(
+            vehicle["id"], payload.current_km - previous_km, required=True
+        )
 
     stock_movements = await db.stock_movements.find({}, {"_id": 0}).to_list(10000)
     expenses = await db.expenses.find({}, {"_id": 0}).to_list(5000)

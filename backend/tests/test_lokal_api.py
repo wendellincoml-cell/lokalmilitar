@@ -12,7 +12,7 @@ def _base():
     return url.rstrip("/")
 
 BASE_URL = _base()
-CREATED = {"products": [], "orders": [], "users": [], "customers": [], "suppliers": [], "categories": [], "expenses": []}
+CREATED = {"products": [], "orders": [], "users": [], "customers": [], "suppliers": [], "categories": [], "expenses": [], "vehicles": []}
 
 
 @pytest.fixture(scope="session")
@@ -309,11 +309,41 @@ def test_dashboard(admin):
 
 
 def test_day_close_is_saved_and_idempotent(admin):
-    first = admin.post(f"{BASE_URL}/api/dashboard/close-day")
+    vehicle_response = admin.post(
+        f"{BASE_URL}/api/vehicles",
+        json={"name": f"TEST_Fechamento_{uuid.uuid4().hex[:6]}", "current_km": 120},
+    )
+    assert vehicle_response.status_code == 200, vehicle_response.text
+    vehicle = vehicle_response.json()
+    CREATED["vehicles"].append(vehicle["id"])
+
+    lower_odometer = admin.post(
+        f"{BASE_URL}/api/dashboard/close-day",
+        json={"vehicle_id": vehicle["id"], "current_km": 119},
+    )
+    assert lower_odometer.status_code == 400, lower_odometer.text
+
+    first = admin.post(
+        f"{BASE_URL}/api/dashboard/close-day",
+        json={"vehicle_id": vehicle["id"], "current_km": 157.5},
+    )
     assert first.status_code == 200, first.text
     report = first.json()
     assert {"id", "date", "closed_at", "summary", "orders", "stock_movements", "expenses"} <= report.keys()
     assert {"orders_count", "orders_total", "stock_movements_count", "expenses_count", "expenses_total"} <= report["summary"].keys()
+    if not report["already_closed"]:
+        mileage_trip = next(
+            expense for expense in report["expenses"]
+            if expense.get("description") == "Quilometragem fora das entregas"
+            and expense.get("vehicle_id") == vehicle["id"]
+        )
+        assert mileage_trip["km"] == 37.5
+        assert mileage_trip["odometer_km"] == 157.5
+        updated_vehicle = next(
+            item for item in admin.get(f"{BASE_URL}/api/vehicles").json()
+            if item["id"] == vehicle["id"]
+        )
+        assert updated_vehicle["current_km"] == 157.5
 
     repeated = admin.post(f"{BASE_URL}/api/dashboard/close-day")
     assert repeated.status_code == 200, repeated.text

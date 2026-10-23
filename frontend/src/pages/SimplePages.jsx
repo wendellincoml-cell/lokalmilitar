@@ -135,7 +135,7 @@ export function Viagens() {
   const destinationOptions = (editing) => (editing.destination_type === "fornecedor" ? suppliers : customers)
     .map((entry) => ({ value: entry.id, label: entry.name }));
   return (
-    <CrudPage title="Viagens & Rotas" subtitle="Registro textual de rotas, combustível e pedágios" endpoint="expenses" testid="viagens"
+    <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
       filter={(r) => r.type === "VIAGEM"} defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: "Gasolina", date: new Date().toISOString().slice(0, 10) }}
       fields={[
         { key: "destination_type", label: "Tipo de destino", type: "select", options: [{ value: "cliente", label: "Cliente" }, { value: "fornecedor", label: "Fornecedor" }], onChange: (value) => ({ destination_type: value, destination_id: "", km: 0, route: "", description: "" }) },
@@ -159,6 +159,7 @@ export function Viagens() {
       columns={[
         { label: "DATA", render: (r) => formatDateShort(r.date) }, { key: "description", label: "DESTINO" },
         { key: "route", label: "ROTA" }, { key: "km", label: "KM" },
+        { label: "KM NO PAINEL", render: (r) => r.odometer_km ?? "—" },
         { label: "COMBUSTÍVEL", render: (r) => formatBRL(r.fuel_cost) }, { label: "PEDÁGIOS", render: (r) => formatBRL(r.toll_cost) },
         { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)) },
       ]}

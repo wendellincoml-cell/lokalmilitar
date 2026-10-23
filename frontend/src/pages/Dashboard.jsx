@@ -7,6 +7,7 @@ import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleD
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
 const UNIT = { "Fardamento": "peças", "Calçados": "pares" };
@@ -58,7 +59,8 @@ const printDayClosure = (report) => {
     movement.kind, movement.product_name, movement.size, movement.qty, movement.nf || movement.reason || "",
   ]);
   const expenseRows = report.expenses.map((expense) => [
-    expense.type, expense.description, formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0)),
+    expense.type, expense.description, expense.km ?? "", expense.odometer_km ?? "",
+    formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0)),
   ]);
 
   printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Fechamento do dia ${escapeHtml(report.date)}</title>
@@ -68,7 +70,7 @@ const printDayClosure = (report) => {
     <div class="summary"><div>Pedidos: ${report.summary.orders_count} · ${formatBRL(report.summary.orders_total)}</div><div>Movimentações de estoque: ${report.summary.stock_movements_count}</div><div>Despesas: ${report.summary.expenses_count} · ${formatBRL(report.summary.expenses_total)}</div></div>
     <h2>Pedidos, vendas, trocas e devoluções</h2>${table(["Pedido", "Tipo", "Cliente", "Status", "Total"], orderRows)}
     <h2>Movimentações de estoque</h2>${table(["Tipo", "Produto", "Tamanho", "Qtd.", "NF / Motivo"], stockRows)}
-    <h2>Despesas, insumos e viagens</h2>${table(["Tipo", "Descrição", "Valor"], expenseRows)}
+    <h2>Despesas, insumos e viagens</h2>${table(["Tipo", "Descrição", "KM", "KM no painel", "Valor"], expenseRows)}
     </body></html>`);
   printWindow.document.close();
   printWindow.setTimeout(() => printWindow.print(), 500);
@@ -83,6 +85,10 @@ export default function Dashboard() {
   const [cats, setCats] = useState([]);
   const [error, setError] = useState("");
   const [closingDay, setClosingDay] = useState(false);
+  const [closeDayDialogOpen, setCloseDayDialogOpen] = useState(false);
+  const [vehicles, setVehicles] = useState([]);
+  const [selectedVehicleId, setSelectedVehicleId] = useState("");
+  const [currentOdometer, setCurrentOdometer] = useState("");
   const [closureReport, setClosureReport] = useState(null);
   const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
   const textColor = dashboardPreferences.card_text_customized ? dashboardPreferences.colors.card_text : null;
@@ -103,10 +109,39 @@ export default function Dashboard() {
       .catch(() => setError("Não foi possível carregar os dados do dashboard."));
   }, [chartDays]);
 
-  const closeDay = async () => {
+  const openCloseDayDialog = async () => {
+    try {
+      const { data: availableVehicles } = await api.get("/vehicles");
+      const activeVehicles = availableVehicles.filter((vehicle) => vehicle.active !== false);
+      setVehicles(activeVehicles);
+      setSelectedVehicleId(activeVehicles[0]?.id || "");
+      setCurrentOdometer("");
+      setCloseDayDialogOpen(true);
+    } catch (vehiclesError) {
+      toast.error(vehiclesError.response?.data?.detail || "Não foi possível carregar os veículos");
+    }
+  };
+
+  const closeDay = async (registerMileage = false) => {
+    let payload;
+    if (registerMileage) {
+      const vehicle = vehicles.find((item) => item.id === selectedVehicleId);
+      const odometer = Number(currentOdometer);
+      if (!vehicle) {
+        toast.error("Selecione um veículo para registrar a quilometragem");
+        return;
+      }
+      if (currentOdometer === "" || !Number.isFinite(odometer) || odometer < Number(vehicle.current_km || 0)) {
+        toast.error(`Informe uma quilometragem igual ou maior que a registrada (${Number(vehicle.current_km || 0)} km)`);
+        return;
+      }
+      payload = { vehicle_id: vehicle.id, current_km: odometer };
+    }
+
     setClosingDay(true);
     try {
-      const { data: report } = await api.post("/dashboard/close-day");
+      const { data: report } = await api.post("/dashboard/close-day", payload);
+      setCloseDayDialogOpen(false);
       setClosureReport(report);
     } catch (closeError) {
       toast.error(closeError.response?.data?.detail || "Não foi possível finalizar o dia");
@@ -183,7 +218,7 @@ export default function Dashboard() {
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
         <div><h1 style={{ color: "var(--title-color)" }}>Dashboard</h1><p>Visão geral da operação · {new Date().toLocaleDateString("pt-BR")}</p></div>
         {isAdmin && (
-          <button className="lm-btn lm-btn-olive" onClick={closeDay} disabled={closingDay} data-testid="close-day">
+          <button className="lm-btn lm-btn-olive" onClick={openCloseDayDialog} disabled={closingDay} data-testid="close-day">
             <ClipboardCheck size={16} />{closingDay ? "FINALIZANDO..." : "FINALIZAR DIA"}
           </button>
         )}
@@ -191,6 +226,64 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {displayOrder.filter((id) => visibility[id] !== false).map(renderItem)}
       </div>
+      <Dialog open={closeDayDialogOpen} onOpenChange={(isOpen) => !closingDay && setCloseDayDialogOpen(isOpen)}>
+        <DialogContent data-testid="close-day-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-head">Finalizar o dia</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-neutral-600">
+              Se desejar, registre a quilometragem atual do veículo. A diferença será salva em Viagens como quilometragem fora das entregas.
+            </p>
+            {vehicles.length > 0 ? (
+              <div className="space-y-3">
+                <label className="block text-sm font-medium" htmlFor="close-day-vehicle">Veículo</label>
+                <select
+                  id="close-day-vehicle"
+                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                  value={selectedVehicleId}
+                  onChange={(event) => setSelectedVehicleId(event.target.value)}
+                  data-testid="close-day-vehicle"
+                >
+                  {vehicles.map((vehicle) => (
+                    <option key={vehicle.id} value={vehicle.id}>
+                      {vehicle.name}{vehicle.plate ? ` · ${vehicle.plate}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <label className="block text-sm font-medium" htmlFor="close-day-odometer">
+                  Quilometragem atual no painel (km)
+                </label>
+                <Input
+                  id="close-day-odometer"
+                  type="number"
+                  min={vehicles.find((vehicle) => vehicle.id === selectedVehicleId)?.current_km || 0}
+                  step="any"
+                  value={currentOdometer}
+                  onChange={(event) => setCurrentOdometer(event.target.value)}
+                  placeholder={`Registrada: ${Number(vehicles.find((vehicle) => vehicle.id === selectedVehicleId)?.current_km || 0)} km`}
+                  data-testid="close-day-odometer"
+                />
+              </div>
+            ) : (
+              <p className="text-sm text-neutral-600">Não há veículos ativos cadastrados. Você pode finalizar o dia sem registrar quilometragem.</p>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button className="lm-btn lm-btn-dark" onClick={() => setCloseDayDialogOpen(false)} disabled={closingDay}>
+                Cancelar
+              </button>
+              <button className="lm-btn lm-btn-dark" onClick={() => closeDay(false)} disabled={closingDay} data-testid="close-day-without-mileage">
+                Finalizar sem quilometragem
+              </button>
+              {vehicles.length > 0 && (
+                <button className="lm-btn lm-btn-olive" onClick={() => closeDay(true)} disabled={closingDay} data-testid="close-day-with-mileage">
+                  {closingDay ? "FINALIZANDO..." : "Finalizar e registrar KM"}
+                </button>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!closureReport} onOpenChange={(isOpen) => !isOpen && setClosureReport(null)}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto" data-testid="day-closure-report">
           <DialogHeader>
@@ -231,9 +324,9 @@ export default function Dashboard() {
               <section>
                 <h3 className="font-head mb-2">Despesas, insumos e viagens</h3>
                 <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
-                  <thead><tr><th>Tipo</th><th>Descrição</th><th>Valor</th></tr></thead>
-                  <tbody>{closureReport.expenses.map((expense) => <tr key={expense.id}><td>{expense.type}</td><td>{expense.description}</td><td>{formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0))}</td></tr>)}
-                    {closureReport.expenses.length === 0 && <tr><td colSpan={3} className="text-center py-3">Sem despesas no dia.</td></tr>}</tbody>
+                  <thead><tr><th>Tipo</th><th>Descrição</th><th>KM</th><th>KM no painel</th><th>Valor</th></tr></thead>
+                  <tbody>{closureReport.expenses.map((expense) => <tr key={expense.id}><td>{expense.type}</td><td>{expense.description}</td><td>{expense.km ?? "—"}</td><td>{expense.odometer_km ?? "—"}</td><td>{formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0))}</td></tr>)}
+                    {closureReport.expenses.length === 0 && <tr><td colSpan={5} className="text-center py-3">Sem despesas no dia.</td></tr>}</tbody>
                 </table></div>
               </section>
             </div>
