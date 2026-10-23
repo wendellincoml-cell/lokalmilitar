@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { Trash2, Download } from "lucide-react";
 import {
   DASHBOARD_KPIS,
   DEFAULT_DASHBOARD_PREFERENCES,
@@ -299,6 +299,10 @@ export default function Settings() {
   const [currentOrderNumber, setCurrentOrderNumber] = useState("");
   const [inviteDays, setInviteDays] = useState(7);
   const [createdInviteLink, setCreatedInviteLink] = useState("");
+  const [resetOptions, setResetOptions] = useState([]);
+  const [resetMode, setResetMode] = useState("all");
+  const [selectedResetGroups, setSelectedResetGroups] = useState([]);
+  const [dayBackups, setDayBackups] = useState([]);
   const isAdmin = user?.role === "admin";
 
   const loadUsers = () => api.get("/auth/users").then((r) => {
@@ -310,6 +314,12 @@ export default function Settings() {
   const loadInvitations = () => api.get("/auth/invitations").then((r) => setInvitations(r.data)).catch((error) => {
     toast.error(error.response?.data?.detail || "Não foi possível carregar os convites");
   });
+  const loadResetOptions = () => api.get("/settings/data-reset/options")
+    .then((response) => setResetOptions(response.data.groups))
+    .catch((error) => toast.error(error.response?.data?.detail || "Não foi possível carregar os dados para limpeza"));
+  const loadDayBackups = () => api.get("/dashboard/backups")
+    .then((response) => setDayBackups(response.data))
+    .catch((error) => toast.error(error.response?.data?.detail || "Não foi possível carregar os backups"));
   useEffect(() => {
     api.get("/settings").then((r) => {
       setS(r.data);
@@ -319,6 +329,8 @@ export default function Settings() {
     loadUsers();
     if (isAdmin) {
       loadInvitations();
+      loadResetOptions();
+      loadDayBackups();
       api.get("/orders/number-sequence").then((r) => {
         setCurrentOrderNumber(String(r.data.current_number));
       }).catch((error) => {
@@ -326,6 +338,44 @@ export default function Settings() {
       });
     }
   }, [applyDashboardPreferences, isAdmin]);
+
+  const resetSystemData = async () => {
+    const groups = resetMode === "all"
+      ? resetOptions.map((option) => option.id)
+      : selectedResetGroups;
+    if (!groups.length) {
+      toast.error("Selecione os dados que deseja apagar");
+      return;
+    }
+    const labels = resetOptions.filter((option) => groups.includes(option.id)).map((option) => option.label);
+    if (!window.confirm(`Esta ação apagará permanentemente:\n\n${labels.join("\n")}\n\nUsuários, configurações e backups serão preservados. Deseja continuar?`)) return;
+    if (window.prompt('Para confirmar, digite "ZERAR":') !== "ZERAR") {
+      toast.error("Limpeza cancelada: confirmação não corresponde");
+      return;
+    }
+    try {
+      const { data } = await api.post("/settings/data-reset", { groups });
+      if (data.order_number_reset) setCurrentOrderNumber("0");
+      toast.success("Dados selecionados apagados. Usuários, configurações e backups foram preservados.");
+      await loadResetOptions();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível apagar os dados selecionados");
+    }
+  };
+
+  const downloadBackup = async (backup) => {
+    try {
+      const { data } = await api.get(`/dashboard/backups/${backup.id}`, { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = backup.filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível baixar o backup");
+    }
+  };
 
   const saveCurrentOrderNumber = async () => {
     const currentNumber = Number(currentOrderNumber);
@@ -558,6 +608,74 @@ export default function Settings() {
             SALVAR NUMERAÇÃO
           </button>
         </div>
+      </section>}
+
+      {isAdmin && <section className="lokal-panel p-4 space-y-3 border border-red-300" data-testid="data-reset-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1 text-red-900">Limpeza de dados do sistema</h2>
+          <p className="text-xs text-neutral-600">A limpeza é permanente. Contas de usuário, configurações e backups ZIP não serão apagados.</p>
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="radio" name="data-reset-mode" value="all" checked={resetMode === "all"} onChange={() => setResetMode("all")} data-testid="reset-mode-all" />
+            Zerar todos os dados operacionais
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="radio" name="data-reset-mode" value="partial" checked={resetMode === "partial"} onChange={() => setResetMode("partial")} data-testid="reset-mode-partial" />
+            Selecionar dados parciais
+          </label>
+        </div>
+        {resetMode === "partial" && (
+          <div className="grid sm:grid-cols-2 gap-2 border rounded p-3">
+            {resetOptions.map((option) => (
+              <label key={option.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selectedResetGroups.includes(option.id)}
+                  onChange={(event) => setSelectedResetGroups((selected) => event.target.checked
+                    ? [...selected, option.id]
+                    : selected.filter((id) => id !== option.id))}
+                  data-testid={`reset-group-${option.id}`}
+                />
+                <span>{option.label} <span className="text-xs text-neutral-500">({option.count})</span></span>
+              </label>
+            ))}
+          </div>
+        )}
+        {resetMode === "all" && (
+          <p className="text-xs text-neutral-500">
+            {resetOptions.reduce((count, option) => count + option.count, 0)} registros estimados em {resetOptions.length} grupos operacionais.
+          </p>
+        )}
+        <button
+          className="px-4 py-2 rounded-sm bg-red-800 text-white disabled:opacity-50"
+          onClick={resetSystemData}
+          disabled={!resetOptions.length || (resetMode === "partial" && !selectedResetGroups.length)}
+          data-testid="execute-data-reset"
+        >
+          APAGAR DADOS SELECIONADOS
+        </button>
+      </section>}
+
+      {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="day-backups-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1">Backups dos fechamentos</h2>
+          <p className="text-xs text-neutral-500">Um arquivo ZIP com os dados do sistema é criado ao finalizar cada dia. Os backups são preservados mesmo ao limpar dados operacionais.</p>
+        </div>
+        {dayBackups.length ? (
+          <div className="space-y-2">
+            {dayBackups.map((backup) => (
+              <div key={backup.id} className="flex flex-wrap items-center justify-between gap-2 border rounded p-2">
+                <span className="text-sm">{backup.day.split("-").reverse().join("/")} · {new Date(backup.created_at).toLocaleString("pt-BR")} · {(Number(backup.size_bytes || 0) / 1024 / 1024).toFixed(2)} MB</span>
+                <button className="lm-btn lm-btn-dark" onClick={() => downloadBackup(backup)} data-testid={`download-backup-${backup.id}`}>
+                  <Download size={14} />Baixar ZIP
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-neutral-500">Nenhum backup de fechamento registrado.</p>
+        )}
       </section>}
 
       <section className="lokal-panel p-4">

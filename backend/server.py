@@ -11,19 +11,34 @@ import jwt
 import bcrypt
 import logging
 import math
+import io
+import tempfile
+import zipfile
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header, Body
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from pymongo.errors import DuplicateKeyError
+from bson import ObjectId, json_util
+from gridfs.errors import NoFile
 
 FUEL_TYPES = ("Gasolina", "Etanol", "Diesel", "GNV")
 DEFAULT_FUEL_PRICES = {fuel_type: 0 for fuel_type in FUEL_TYPES}
+RESET_GROUPS = {
+    "orders": "Pedidos, comissões e registros vinculados",
+    "inventory": "Produtos, categorias, grades e movimentações de estoque",
+    "customers": "Clientes",
+    "suppliers": "Fornecedores",
+    "vehicles": "Veículos",
+    "expenses": "Despesas, insumos, viagens e manutenções",
+    "vendors": "Vendedores",
+    "day_closures": "Relatórios de fechamento do dia",
+}
 
 # ---------- DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -518,6 +533,7 @@ class Expense(BaseModel):
     fuel_price_per_liter: float = 0
     km: float = 0
     odometer_km: Optional[float] = None
+    day_close_date: Optional[str] = None
     route: Optional[str] = None
     # Manutencao
     plate: Optional[str] = None
@@ -542,6 +558,9 @@ class OrderNumberSequenceUpdate(BaseModel):
 class DayClosureInput(BaseModel):
     vehicle_id: str
     current_km: float = Field(ge=0)
+
+class DataResetInput(BaseModel):
+    groups: List[str]
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1444,6 +1463,100 @@ async def update_settings(payload: dict, user: dict = Depends(get_current_user))
     await db.settings.update_one({"id": "singleton"}, {"$set": payload}, upsert=True)
     return await db.settings.find_one({"id": "singleton"}, {"_id": 0})
 
+async def _delete_count(collection_name: str, query: Optional[dict] = None) -> int:
+    result = await db[collection_name].delete_many(query or {})
+    return result.deleted_count
+
+async def _data_reset_counts() -> dict:
+    order_ids = [
+        order["id"] for order in await db.orders.find({}, {"_id": 0, "id": 1}).to_list(None)
+    ]
+    return {
+        "orders": await db.orders.count_documents({}),
+        "commissions": await db.commissions.count_documents({}),
+        "order_stock_movements": await db.stock_movements.count_documents({"order_id": {"$exists": True, "$ne": None}}),
+        "order_trips": await db.expenses.count_documents({"order_id": {"$exists": True, "$ne": None}}),
+        "products": await db.products.count_documents({}),
+        "categories": await db.categories.count_documents({}),
+        "size_grids": await db.size_grids.count_documents({}),
+        "stock_movements": await db.stock_movements.count_documents({}),
+        "customers": await db.customers.count_documents({}),
+        "suppliers": await db.suppliers.count_documents({}),
+        "vehicles": await db.vehicles.count_documents({}),
+        "expenses": await db.expenses.count_documents({}),
+        "vendors": await db.vendors.count_documents({}),
+        "day_closures": await db.day_closures.count_documents({}),
+        "order_ids": order_ids,
+    }
+
+@api.get("/settings/data-reset/options")
+async def data_reset_options(user: dict = Depends(require_admin)):
+    counts = await _data_reset_counts()
+    return {
+        "preserved": ["users", "settings", "backups"],
+        "groups": [
+            {"id": "orders", "label": RESET_GROUPS["orders"], "count": counts["orders"]},
+            {
+                "id": "inventory",
+                "label": RESET_GROUPS["inventory"],
+                "count": counts["products"] + counts["categories"] + counts["size_grids"] + counts["stock_movements"],
+            },
+            {"id": "customers", "label": RESET_GROUPS["customers"], "count": counts["customers"]},
+            {"id": "suppliers", "label": RESET_GROUPS["suppliers"], "count": counts["suppliers"]},
+            {"id": "vehicles", "label": RESET_GROUPS["vehicles"], "count": counts["vehicles"]},
+            {"id": "expenses", "label": RESET_GROUPS["expenses"], "count": counts["expenses"]},
+            {"id": "vendors", "label": RESET_GROUPS["vendors"], "count": counts["vendors"]},
+            {"id": "day_closures", "label": RESET_GROUPS["day_closures"], "count": counts["day_closures"]},
+        ],
+    }
+
+@api.post("/settings/data-reset")
+async def reset_data(payload: DataResetInput, user: dict = Depends(require_admin)):
+    selected = set(payload.groups)
+    if not selected or selected - {*RESET_GROUPS}:
+        raise HTTPException(400, "Selecione pelo menos um grupo válido para apagar")
+
+    deleted = {}
+    counts = await _data_reset_counts()
+    order_ids = counts.pop("order_ids")
+    if "orders" in selected:
+        deleted["orders"] = await _delete_count("orders")
+        deleted["commissions"] = await _delete_count("commissions")
+        deleted["stock_movements_for_orders"] = await _delete_count(
+            "stock_movements", {"order_id": {"$in": order_ids}}
+        ) if order_ids else 0
+        deleted["trips_for_orders"] = await _delete_count(
+            "expenses", {"order_id": {"$in": order_ids}}
+        ) if order_ids else 0
+        await db.counters.delete_one({"_id": "orders"})
+
+    if "inventory" in selected:
+        for collection in ("products", "categories", "size_grids", "stock_movements"):
+            deleted[collection] = await _delete_count(collection)
+    elif "orders" in selected:
+        deleted["stock_movements_for_orders"] = counts["order_stock_movements"]
+
+    for group, collection in (
+        ("customers", "customers"),
+        ("suppliers", "suppliers"),
+        ("vehicles", "vehicles"),
+        ("vendors", "vendors"),
+        ("day_closures", "day_closures"),
+    ):
+        if group in selected:
+            deleted[collection] = await _delete_count(collection)
+
+    if "expenses" in selected:
+        deleted["expenses"] = await _delete_count("expenses")
+    elif "orders" in selected:
+        deleted["trips_for_orders"] = counts["order_trips"]
+
+    return {
+        "deleted": deleted,
+        "preserved": ["users", "settings", "backups"],
+        "order_number_reset": "orders" in selected,
+    }
+
 # ---------- Dashboard summary ----------
 BUSINESS_TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
@@ -1461,6 +1574,94 @@ def _business_date(value: Any) -> Optional[str]:
     except ValueError:
         return raw[:10]
 
+async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = None) -> dict:
+    stock_movements = await db.stock_movements.find({}, {"_id": 0}).to_list(10000)
+    expenses = await db.expenses.find({}, {"_id": 0}).to_list(5000)
+    day_movements = [
+        movement for movement in stock_movements
+        if _business_date(movement.get("created_at")) == day
+    ]
+    day_expenses = [
+        expense for expense in expenses
+        if _business_date(expense.get("date")) == day
+    ]
+    related_order_ids = {
+        movement.get("order_id") for movement in day_movements if movement.get("order_id")
+    }
+    related_order_ids.update(
+        expense.get("order_id") for expense in day_expenses if expense.get("order_id")
+    )
+    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    day_orders = [
+        order for order in orders
+        if _business_date(order.get("created_at")) == day or order.get("id") in related_order_ids
+    ]
+    return {
+        "id": (existing or {}).get("id") or new_id(),
+        "date": day,
+        "closed_at": (existing or {}).get("closed_at") or now_iso(),
+        "closed_by": (existing or {}).get("closed_by")
+        or user.get("name") or user.get("email") or "Administrador",
+        "already_closed": bool(existing),
+        "summary": {
+            "orders_count": len(day_orders),
+            "orders_total": sum(float(order.get("total") or 0) for order in day_orders),
+            "stock_movements_count": len(day_movements),
+            "expenses_count": len(day_expenses),
+            "expenses_total": sum(
+                float(expense.get("amount") or 0)
+                + float(expense.get("fuel_cost") or 0)
+                + float(expense.get("toll_cost") or 0)
+                for expense in day_expenses
+            ),
+        },
+        "orders": day_orders,
+        "stock_movements": day_movements,
+        "expenses": day_expenses,
+    }
+
+async def _create_day_backup(day: str) -> dict:
+    collection_names = sorted(
+        name for name in await db.list_collection_names()
+        if name not in ("backups", "fs.files", "fs.chunks")
+    )
+    filename = f"lokal-militar-backup-{day}.zip"
+    bucket = AsyncIOMotorGridFSBucket(db)
+    with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024, mode="w+b") as archive_buffer:
+        with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            manifest = {
+                "created_at": now_iso(),
+                "day": day,
+                "format": "MongoDB Extended JSON",
+                "collections": collection_names,
+                "excluded_backup_storage": ["backups", "fs.files", "fs.chunks"],
+            }
+            archive.writestr("manifest.json", json_util.dumps(manifest, ensure_ascii=False, indent=2))
+            for collection_name in collection_names:
+                with archive.open(f"data/{collection_name}.json", "w") as collection_file:
+                    collection_file.write(b"[")
+                    first_document = True
+                    async for document in db[collection_name].find({}):
+                        if not first_document:
+                            collection_file.write(b",")
+                        collection_file.write(json_util.dumps(document, ensure_ascii=False).encode("utf-8"))
+                        first_document = False
+                    collection_file.write(b"]")
+        archive_buffer.seek(0, io.SEEK_END)
+        size_bytes = archive_buffer.tell()
+        archive_buffer.seek(0)
+        gridfs_id = await bucket.upload_from_stream(filename, archive_buffer)
+    backup = {
+        "id": new_id(),
+        "day": day,
+        "created_at": now_iso(),
+        "filename": filename,
+        "gridfs_id": str(gridfs_id),
+        "size_bytes": size_bytes,
+    }
+    await db.backups.insert_one(backup.copy())
+    return backup
+
 @api.get("/dashboard/closures")
 async def list_day_closures(user: dict = Depends(require_admin)):
     closures = await db.day_closures.find(
@@ -1473,7 +1674,39 @@ async def get_day_closure(day: str, user: dict = Depends(require_admin)):
     closure = await db.day_closures.find_one({"date": day}, {"_id": 0})
     if not closure:
         raise HTTPException(404, "Fechamento não encontrado")
-    return closure
+    refreshed = await _build_day_closure(day, user, closure)
+    refreshed["backup_id"] = closure.get("backup_id")
+    await db.day_closures.update_one({"date": day}, {"$set": {
+        "summary": refreshed["summary"],
+        "orders": refreshed["orders"],
+        "stock_movements": refreshed["stock_movements"],
+        "expenses": refreshed["expenses"],
+    }})
+    return refreshed
+
+@api.get("/dashboard/backups")
+async def list_day_backups(user: dict = Depends(require_admin)):
+    return await db.backups.find(
+        {}, {"_id": 0, "gridfs_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+
+@api.get("/dashboard/backups/{backup_id}")
+async def download_day_backup(backup_id: str, user: dict = Depends(require_admin)):
+    backup = await db.backups.find_one({"id": backup_id}, {"_id": 0})
+    if not backup:
+        raise HTTPException(404, "Backup não encontrado")
+    try:
+        gridfs_id = ObjectId(backup["gridfs_id"])
+        bucket = AsyncIOMotorGridFSBucket(db)
+        archive = await bucket.open_download_stream(gridfs_id)
+        content = await archive.read()
+    except (KeyError, ValueError, NoFile):
+        raise HTTPException(404, "Arquivo de backup não encontrado")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{backup["filename"]}"'},
+    )
 
 @api.post("/dashboard/close-day")
 async def close_dashboard_day(
@@ -1482,9 +1715,6 @@ async def close_dashboard_day(
 ):
     day = datetime.now(BUSINESS_TIMEZONE).date().isoformat()
     existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
-    if existing:
-        existing["already_closed"] = True
-        return existing
 
     if payload:
         vehicle = await db.vehicles.find_one(
@@ -1492,76 +1722,67 @@ async def close_dashboard_day(
         )
         if not vehicle:
             raise HTTPException(400, "Veículo não encontrado ou inativo")
-        previous_km = float(vehicle.get("current_km") or 0)
-        if payload.current_km < previous_km:
-            raise HTTPException(
-                400,
-                f"A quilometragem informada não pode ser menor que a registrada ({previous_km:g} km)",
-            )
-        trip = Expense(
-            type="VIAGEM",
-            description="Quilometragem fora das entregas",
-            date=day,
-            vehicle_id=vehicle["id"],
-            vehicle_name=vehicle["name"],
-            km=payload.current_km - previous_km,
-            odometer_km=payload.current_km,
-            route="Registro de quilometragem no fechamento do dia",
-            avg_consumption=float(vehicle.get("avg_consumption") or 0),
-        ).model_dump()
-        trip = await _prepare_trip(trip)
-        await db.expenses.insert_one(trip)
-        await _change_vehicle_km(
-            vehicle["id"], payload.current_km - previous_km, required=True
+        existing_mileage = await db.expenses.find_one(
+            {"type": "VIAGEM", "day_close_date": day, "vehicle_id": vehicle["id"]},
+            {"_id": 0},
         )
+        if existing_mileage:
+            if float(existing_mileage.get("odometer_km") or 0) != payload.current_km:
+                raise HTTPException(409, "Já existe um registro de quilometragem para este veículo e dia")
+            await db.vehicles.update_one(
+                {"id": vehicle["id"], "current_km": {"$lt": payload.current_km}},
+                {"$set": {"current_km": payload.current_km}},
+            )
+        else:
+            previous_km = float(vehicle.get("current_km") or 0)
+            if payload.current_km < previous_km:
+                raise HTTPException(
+                    400,
+                    f"A quilometragem informada não pode ser menor que a registrada ({previous_km:g} km)",
+                )
+            trip = Expense(
+                type="VIAGEM",
+                description="Quilometragem fora das entregas",
+                date=day,
+                day_close_date=day,
+                vehicle_id=vehicle["id"],
+                vehicle_name=vehicle["name"],
+                km=payload.current_km - previous_km,
+                odometer_km=payload.current_km,
+                route="Registro de quilometragem no fechamento do dia",
+                avg_consumption=float(vehicle.get("avg_consumption") or 0),
+            ).model_dump()
+            trip = await _prepare_trip(trip)
+            await db.expenses.insert_one(trip)
+            await _change_vehicle_km(
+                vehicle["id"], payload.current_km - previous_km, required=True
+            )
 
-    stock_movements = await db.stock_movements.find({}, {"_id": 0}).to_list(10000)
-    expenses = await db.expenses.find({}, {"_id": 0}).to_list(5000)
-    day_movements = [movement for movement in stock_movements if _business_date(movement.get("created_at")) == day]
-    day_expenses = [expense for expense in expenses if _business_date(expense.get("date")) == day]
-    related_order_ids = {
-        movement.get("order_id") for movement in day_movements if movement.get("order_id")
-    }
-    related_order_ids.update(
-        expense.get("order_id") for expense in day_expenses if expense.get("order_id")
-    )
-    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
-    day_orders = [
-        order for order in orders
-        if _business_date(order.get("created_at")) == day or order.get("id") in related_order_ids
-    ]
-    order_total = sum(float(order.get("total") or 0) for order in day_orders)
-    expense_total = sum(
-        float(expense.get("amount") or 0)
-        + float(expense.get("fuel_cost") or 0)
-        + float(expense.get("toll_cost") or 0)
-        for expense in day_expenses
-    )
-    report = {
-        "id": new_id(),
-        "date": day,
-        "closed_at": now_iso(),
-        "closed_by": user.get("name") or user.get("email") or "Administrador",
-        "already_closed": False,
-        "summary": {
-            "orders_count": len(day_orders),
-            "orders_total": order_total,
-            "stock_movements_count": len(day_movements),
-            "expenses_count": len(day_expenses),
-            "expenses_total": expense_total,
-        },
-        "orders": day_orders,
-        "stock_movements": day_movements,
-        "expenses": day_expenses,
-    }
-    try:
-        await db.day_closures.insert_one(report.copy())
-    except DuplicateKeyError:
-        existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
-        if not existing:
-            raise
-        existing["already_closed"] = True
-        return existing
+    report = await _build_day_closure(day, user, existing)
+    report["backup_id"] = (existing or {}).get("backup_id")
+    if existing:
+        await db.day_closures.update_one({"date": day}, {"$set": {
+            "summary": report["summary"],
+            "orders": report["orders"],
+            "stock_movements": report["stock_movements"],
+            "expenses": report["expenses"],
+        }})
+    else:
+        try:
+            await db.day_closures.insert_one(report.copy())
+        except DuplicateKeyError:
+            existing = await db.day_closures.find_one({"date": day}, {"_id": 0})
+            if not existing:
+                raise
+            report = await _build_day_closure(day, user, existing)
+            report["backup_id"] = existing.get("backup_id")
+
+    if not report.get("backup_id"):
+        backup = await _create_day_backup(day)
+        report["backup_id"] = backup["id"]
+        await db.day_closures.update_one(
+            {"date": day}, {"$set": {"backup_id": backup["id"]}}
+        )
     return report
 
 @api.get("/dashboard")

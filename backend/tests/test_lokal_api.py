@@ -1,6 +1,8 @@
 # LOKAL MILITAR ERP - backend regression tests (open access, users, products, stock, orders, desmontagem, trocas, commissions, crud, settings)
 import os
 import uuid
+import io
+import zipfile
 from urllib.parse import urlparse
 import pytest
 import requests
@@ -366,6 +368,14 @@ def test_dashboard(admin):
 
 
 def test_day_close_is_saved_and_idempotent(admin):
+    order_response = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Fechamento", "items": [], "status": "Orçamento"},
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()
+    CREATED["orders"].append(order["id"])
+
     vehicle_response = admin.post(
         f"{BASE_URL}/api/vehicles",
         json={"name": f"TEST_Fechamento_{uuid.uuid4().hex[:6]}", "current_km": 120},
@@ -388,19 +398,26 @@ def test_day_close_is_saved_and_idempotent(admin):
     report = first.json()
     assert {"id", "date", "closed_at", "summary", "orders", "stock_movements", "expenses"} <= report.keys()
     assert {"orders_count", "orders_total", "stock_movements_count", "expenses_count", "expenses_total"} <= report["summary"].keys()
-    if not report["already_closed"]:
-        mileage_trip = next(
-            expense for expense in report["expenses"]
-            if expense.get("description") == "Quilometragem fora das entregas"
-            and expense.get("vehicle_id") == vehicle["id"]
-        )
-        assert mileage_trip["km"] == 37.5
-        assert mileage_trip["odometer_km"] == 157.5
-        updated_vehicle = next(
-            item for item in admin.get(f"{BASE_URL}/api/vehicles").json()
-            if item["id"] == vehicle["id"]
-        )
-        assert updated_vehicle["current_km"] == 157.5
+    assert any(item["id"] == order["id"] for item in report["orders"])
+    mileage_trip = next(
+        expense for expense in report["expenses"]
+        if expense.get("description") == "Quilometragem fora das entregas"
+        and expense.get("vehicle_id") == vehicle["id"]
+    )
+    assert mileage_trip["km"] == 37.5
+    assert mileage_trip["odometer_km"] == 157.5
+    updated_vehicle = next(
+        item for item in admin.get(f"{BASE_URL}/api/vehicles").json()
+        if item["id"] == vehicle["id"]
+    )
+    assert updated_vehicle["current_km"] == 157.5
+    assert report.get("backup_id")
+    backup_response = admin.get(f"{BASE_URL}/api/dashboard/backups/{report['backup_id']}")
+    assert backup_response.status_code == 200, backup_response.text
+    assert backup_response.content.startswith(b"PK")
+    with zipfile.ZipFile(io.BytesIO(backup_response.content)) as backup_archive:
+        assert "manifest.json" in backup_archive.namelist()
+        assert "data/orders.json" in backup_archive.namelist()
 
     repeated = admin.post(f"{BASE_URL}/api/dashboard/close-day")
     assert repeated.status_code == 200, repeated.text
@@ -412,3 +429,37 @@ def test_day_close_is_saved_and_idempotent(admin):
     saved_report = admin.get(f"{BASE_URL}/api/dashboard/closures/{report['date']}")
     assert saved_report.status_code == 200, saved_report.text
     assert saved_report.json()["id"] == report["id"]
+    assert any(item["id"] == order["id"] for item in saved_report.json()["orders"])
+
+def test_reset_orders_preserves_settings_and_customers(admin):
+    customer_response = admin.post(
+        f"{BASE_URL}/api/customers",
+        json={"name": f"TEST_Reset_{uuid.uuid4().hex[:6]}"},
+    )
+    assert customer_response.status_code == 200, customer_response.text
+    customer = customer_response.json()
+    CREATED["customers"].append(customer["id"])
+
+    first_order = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Ordem para zerar", "items": []},
+    )
+    assert first_order.status_code == 200, first_order.text
+    CREATED["orders"].append(first_order.json()["id"])
+
+    old_settings = admin.get(f"{BASE_URL}/api/settings").json()
+    result = admin.post(f"{BASE_URL}/api/settings/data-reset", json={"groups": ["orders"]})
+    assert result.status_code == 200, result.text
+    assert result.json()["order_number_reset"] is True
+    assert result.json()["preserved"] == ["users", "settings", "backups"]
+    assert admin.get(f"{BASE_URL}/api/orders/number-sequence").json()["current_number"] == 0
+    assert any(item["id"] == customer["id"] for item in admin.get(f"{BASE_URL}/api/customers").json())
+    assert admin.get(f"{BASE_URL}/api/settings").json()["store_name"] == old_settings["store_name"]
+
+    next_order = admin.post(
+        f"{BASE_URL}/api/orders",
+        json={"customer_name": "TEST_Primeiro após zerar", "items": []},
+    )
+    assert next_order.status_code == 200, next_order.text
+    CREATED["orders"].append(next_order.json()["id"])
+    assert next_order.json()["number"] == 1

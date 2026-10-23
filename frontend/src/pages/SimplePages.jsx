@@ -60,6 +60,33 @@ export function Suppliers() {
 
 const total = (rows, fn) => formatBRL(rows.reduce((s, r) => s + fn(r), 0));
 const FUEL_TYPES = ["Gasolina", "Etanol", "Diesel", "GNV"];
+const escapeReportHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[character]));
+const getTravelPeriodRange = (type, value) => {
+  if (type === "week") {
+    const match = /^(\d{4})-W(\d{2})$/.exec(value);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const week = Number(match[2]);
+    const januaryFourth = new Date(Date.UTC(year, 0, 4));
+    const weekday = (januaryFourth.getUTCDay() + 6) % 7;
+    const start = new Date(januaryFourth.getTime() - weekday * 86400000 + (week - 1) * 7 * 86400000);
+    const end = new Date(start.getTime() + 7 * 86400000);
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10), label: `Semana ${week} de ${year}` };
+  }
+  if (type === "month") {
+    const match = /^(\d{4})-(\d{2})$/.exec(value);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const end = new Date(Date.UTC(year, month, 1));
+    return { start: `${match[1]}-${match[2]}-01`, end: end.toISOString().slice(0, 10), label: `${match[2]}/${match[1]}` };
+  }
+  if (!/^\d{4}$/.test(value)) return null;
+  const year = Number(value);
+  return { start: `${value}-01-01`, end: `${year + 1}-01-01`, label: value };
+};
 const recalculateTrip = (trip, changes = {}) => {
   const updated = { ...trip, ...changes };
   const km = Math.max(Number(updated.km || 0), 0);
@@ -142,6 +169,15 @@ export function Viagens() {
   const [suppliers, setSuppliers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [fuelPrices, setFuelPrices] = useState({});
+  const [reportPeriodType, setReportPeriodType] = useState("week");
+  const [reportPeriod, setReportPeriod] = useState(() => {
+    const now = new Date();
+    const date = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const week = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+  });
   useEffect(() => {
     Promise.all([api.get("/customers"), api.get("/suppliers"), api.get("/vehicles"), api.get("/settings")])
       .then(([c, s, v, settings]) => {
@@ -174,8 +210,86 @@ export function Viagens() {
       }),
     };
   };
+  const printTravelReport = async () => {
+    const range = getTravelPeriodRange(reportPeriodType, reportPeriod);
+    if (!range) {
+      toast.error("Selecione um período válido para o relatório");
+      return;
+    }
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("Permita pop-ups para imprimir o relatório");
+      return;
+    }
+    try {
+      const { data: expenses } = await api.get("/expenses");
+      const trips = expenses
+        .filter((expense) => expense.type === "VIAGEM")
+        .filter((trip) => {
+          const date = String(trip.date || "").slice(0, 10);
+          return date >= range.start && date < range.end;
+        })
+        .sort((first, second) => String(first.date).localeCompare(String(second.date)));
+      const totalKm = trips.reduce((sum, trip) => sum + Number(trip.km || 0), 0);
+      const rows = trips.map((trip) => `
+        <tr><td>${escapeReportHtml(String(trip.date || "").slice(0, 10).split("-").reverse().join("/"))}</td>
+        <td>${escapeReportHtml(trip.description)}</td><td>${escapeReportHtml(trip.route)}</td>
+        <td>${escapeReportHtml(trip.vehicle_name || vehicles.find((vehicle) => vehicle.id === trip.vehicle_id)?.name || "—")}</td>
+        <td>${escapeReportHtml(trip.fuel_type || "—")}</td><td>${escapeReportHtml(Number(trip.km || 0).toLocaleString("pt-BR"))}</td></tr>`);
+      printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório de percursos · ${escapeReportHtml(range.label)}</title>
+        <style>body{font:12px Arial,sans-serif;padding:24px;color:#222}h1{color:#354017;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #aaa;padding:7px;text-align:left}th{background:#eee}.summary{margin-top:16px;padding:10px;border:1px solid #aaa;font-weight:bold}</style>
+        </head><body><h1>LOKAL MILITAR — Relatório de percursos</h1><p>Período: ${escapeReportHtml(range.label)} · ${escapeReportHtml(range.start)} a ${escapeReportHtml(new Date(new Date(`${range.end}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10))}</p>
+        <table><thead><tr><th>Data</th><th>Percurso</th><th>Rota</th><th>Veículo</th><th>Combustível</th><th>KM percorridos</th></tr></thead>
+        <tbody>${rows.length ? rows.join("") : '<tr><td colspan="6" style="text-align:center">Nenhum percurso registrado no período.</td></tr>'}</tbody></table>
+        <div class="summary">Quilometragem total percorrida: ${escapeReportHtml(totalKm.toLocaleString("pt-BR"))} km</div></body></html>`);
+      printWindow.document.close();
+      printWindow.setTimeout(() => printWindow.print(), 300);
+    } catch (error) {
+      printWindow.close();
+      toast.error(error.response?.data?.detail || "Não foi possível gerar o relatório de percursos");
+    }
+  };
   return (
-    <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
+    <>
+      <section className="lokal-panel p-3 mb-3 flex flex-wrap items-end gap-3" data-testid="travel-report-filters">
+        <div className="font-head text-sm">Relatório de percursos</div>
+        <label className="text-xs font-mono">
+          Período
+          <select className="lm-input mt-1" value={reportPeriodType} onChange={(event) => {
+            const type = event.target.value;
+            setReportPeriodType(type);
+            const now = new Date();
+            if (type === "month") setReportPeriod(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+            else if (type === "year") setReportPeriod(String(now.getFullYear()));
+            else {
+              const date = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+              date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+              const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+              const week = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+              setReportPeriod(`${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`);
+            }
+          }} data-testid="travel-report-period-type">
+            <option value="week">Semana</option><option value="month">Mês</option><option value="year">Ano</option>
+          </select>
+        </label>
+        <label className="text-xs font-mono">
+          {reportPeriodType === "week" ? "Semana selecionada" : reportPeriodType === "month" ? "Mês selecionado" : "Ano selecionado"}
+          <input
+            className="lm-input mt-1"
+            type={reportPeriodType === "year" ? "number" : reportPeriodType}
+            min={reportPeriodType === "year" ? 2000 : undefined}
+            max={reportPeriodType === "year" ? 2100 : undefined}
+            step={reportPeriodType === "year" ? 1 : undefined}
+            value={reportPeriod}
+            onChange={(event) => setReportPeriod(event.target.value)}
+            data-testid="travel-report-period"
+          />
+        </label>
+        <button className="lm-btn lm-btn-dark" onClick={printTravelReport} data-testid="print-travel-report">
+          Imprimir relatório de percursos
+        </button>
+      </section>
+      <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
       filter={(r) => r.type === "VIAGEM"} prepareEdit={prepareTripEdit}
       defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: FUEL_TYPES[0], fuel_price_per_liter: Number(fuelPrices[FUEL_TYPES[0]] || 0), date: new Date().toISOString().slice(0, 10) }}
       fields={[
@@ -215,6 +329,7 @@ export function Viagens() {
         { label: "TOTAL", render: (r) => formatBRL(Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)) },
       ]}
       footer={(rows) => sumBox("Total em viagens", total(rows, (r) => Number(r.fuel_cost || 0) + Number(r.toll_cost || 0) + Number(r.amount || 0)))} />
+    </>
   );
 }
 

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays } from "lucide-react";
+import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer, CalendarDays, Download } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -93,6 +93,7 @@ export default function Dashboard() {
   const [selectedClosureDate, setSelectedClosureDate] = useState("");
   const [loadingClosureHistory, setLoadingClosureHistory] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
+  const [downloadingBackup, setDownloadingBackup] = useState(false);
   const { chart_days: chartDays, chart_type: chartType, order, visibility, grid_positions: configuredGridPositions } = dashboardPreferences;
   const textColor = dashboardPreferences.card_text_customized ? dashboardPreferences.colors.card_text : null;
   const colors = {
@@ -181,6 +182,27 @@ export default function Dashboard() {
       toast.error(historyError.response?.data?.detail || "Não foi possível carregar o fechamento selecionado");
     } finally {
       setLoadingClosureHistory(false);
+    }
+  };
+
+  const downloadClosureBackup = async () => {
+    if (!closureReport?.backup_id) {
+      toast.error("Este fechamento não possui um backup associado");
+      return;
+    }
+    setDownloadingBackup(true);
+    try {
+      const { data } = await api.get(`/dashboard/backups/${closureReport.backup_id}`, { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `lokal-militar-backup-${closureReport.date}.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível baixar o backup");
+    } finally {
+      setDownloadingBackup(false);
     }
   };
 
@@ -375,9 +397,16 @@ export default function Dashboard() {
                   {closureReport.already_closed ? "Relatório do dia já finalizado" : "Dia finalizado"}
                   {" · "}{new Date(closureReport.closed_at).toLocaleString("pt-BR")} · {closureReport.closed_by}
                 </p>
+                <div className="flex flex-wrap gap-2">
+                {closureReport.backup_id && (
+                  <button className="lm-btn lm-btn-dark" onClick={downloadClosureBackup} disabled={downloadingBackup} data-testid="download-day-backup">
+                    <Download size={15} />{downloadingBackup ? "BAIXANDO..." : "Baixar backup ZIP"}
+                  </button>
+                )}
                 <button className="lm-btn lm-btn-dark" onClick={() => {
                   if (!printDayClosure(closureReport)) toast.error("Permita pop-ups para imprimir o relatório");
                 }} data-testid="print-day-closure"><Printer size={15} />Imprimir relatório</button>
+                </div>
               </div>
               <div className="grid sm:grid-cols-3 gap-3" data-testid="day-closure-summary">
                 <div className="lokal-panel p-3"><div className="font-head text-xs">Pedidos no relatório</div><div className="text-xl font-bold">{closureReport.summary.orders_count}</div><div>{formatBRL(closureReport.summary.orders_total)}</div></div>
