@@ -9,11 +9,18 @@ import { DASHBOARD_KPIS } from "@/pages/dashboardPreferences";
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
 const UNIT = { "Fardamento": "peças", "Calçados": "pares" };
 
+const DashboardCardHeader = ({ children, icon: Icon, iconColor }) => (
+  <div className="lm-card-head" style={{ background: "var(--card-header-background)", color: "var(--card-header-text)" }}>
+    <span className="text-[15px]">{children}</span>
+    {Icon && <Icon size={18} color={iconColor} />}
+  </div>
+);
+
 const CategoryCard = ({ cat, onClick, colors }) => {
   const Icon = ICONS[cat.icon] || Package;
   return (
     <button onClick={onClick} className="lokal-tile text-left overflow-hidden" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid={`card-cat-${cat.name}`}>
-      <div className="lm-card-head" style={{ background: "var(--card-header-bg)", color: "var(--card-header-text)" }}><span className="text-[15px]">{cat.name}</span><Icon size={18} color={colors.chart_accent} /></div>
+      <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent}>{cat.name}</DashboardCardHeader>
       <div className="px-4 py-3">
         <div className="flex items-baseline gap-2"><span className="font-head text-3xl font-bold">{Math.round(cat.qty)}</span><span className="text-sm" style={{ color: "var(--muted-text-color)" }}>{UNIT[cat.name] || "unid"}</span></div>
         <div className="text-sm" style={{ color: "var(--muted-text-color)" }}>Valor: <b style={{ color: "var(--system-text-color)" }}>{formatBRL(cat.value)}</b></div>
@@ -22,13 +29,12 @@ const CategoryCard = ({ cat, onClick, colors }) => {
   );
 };
 
-const Kpi = ({ icon: Icon, color, label, value, sub, onClick, testid, colors }) => (
-  <button onClick={onClick} className="lokal-tile p-4 flex items-center gap-4 text-left" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid={testid}>
-    <div className="lm-icon-sq" style={{ background: color }}><Icon size={20} /></div>
-    <div className="min-w-0">
-      <div className="font-head text-[12px]" style={{ color: "var(--muted-text-color)" }}>{label}</div>
+const Kpi = ({ icon: Icon, label, value, sub, onClick, testid, colors }) => (
+  <button onClick={onClick} className="lokal-tile text-left overflow-hidden" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }} data-testid={testid}>
+    <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent}>{label}</DashboardCardHeader>
+    <div className="px-4 py-3">
       <div className="font-head text-2xl font-bold leading-tight">{value}</div>
-      {sub && <div className="text-xs truncate" style={{ color: "var(--muted-text-color)" }}>{sub}</div>}
+      {sub && <div className="text-sm truncate" style={{ color: "var(--muted-text-color)" }}>{sub}</div>}
     </div>
   </button>
 );
@@ -63,13 +69,13 @@ export default function Dashboard() {
   const tiles = Object.entries(data.totals_by_cat).map(([name, v]) => ({ name, ...v, icon: cats.find((c) => c.name === name)?.icon }));
   const chartData = data.chart.map((d) => ({ label: d.date.slice(8, 10) + "/" + d.date.slice(5, 7), vendas: d.value }));
   const kpis = {
-    orders_today: { icon: ClipboardList, color: "var(--olive)", label: "Pedidos hoje", value: data.orders_today, sub: formatBRL(data.orders_today_total), onClick: () => nav("/pedidos"), testid: "kpi-orders-today" },
-    pending: { icon: Clock, color: "var(--gold)", label: "Pedidos pendentes", value: data.pending, sub: "Orçamento / Aprovado / Separado", onClick: () => nav("/pedidos"), testid: "kpi-pending" },
-    customers: { icon: Users, color: "var(--sidebar-bg)", label: "Clientes", value: data.customers, onClick: () => nav("/clientes"), testid: "kpi-customers" },
-    commission_month: { icon: CircleDollarSign, color: "var(--gold)", label: "Comissão do mês", value: formatBRL(data.commission_month), onClick: () => nav("/comissoes"), testid: "kpi-commission" },
-    low_stock: { icon: AlertTriangle, color: "var(--gold)", label: "Estoque baixo", value: data.low_stock.length, sub: "tamanhos no mínimo", onClick: () => nav("/estoque?low=1"), testid: "kpi-low-stock" },
-    insumos: { icon: Scissors, color: "var(--olive)", label: "Gastos insumos (mês)", value: formatBRL(data.insumos_month), onClick: () => nav("/insumos"), testid: "kpi-insumos" },
-    maintenance: { icon: Car, color: "var(--sidebar-bg)", label: "Manutenção veículo", value: formatBRL(data.manut_month), sub: data.manut_alerts ? `${data.manut_alerts} revisão(ões) próxima(s)` : "Sem alertas", onClick: () => nav("/manutencao"), testid: "kpi-manutencao" },
+    orders_today: { icon: ClipboardList, label: "Pedidos hoje", value: data.orders_today, sub: formatBRL(data.orders_today_total), onClick: () => nav("/pedidos"), testid: "kpi-orders-today" },
+    pending: { icon: Clock, label: "Pedidos pendentes", value: data.pending, sub: "Orçamento / Aprovado / Separado", onClick: () => nav("/pedidos"), testid: "kpi-pending" },
+    customers: { icon: Users, label: "Clientes", value: data.customers, onClick: () => nav("/clientes"), testid: "kpi-customers" },
+    commission_month: { icon: CircleDollarSign, label: "Comissão do mês", value: formatBRL(data.commission_month), onClick: () => nav("/comissoes"), testid: "kpi-commission" },
+    low_stock: { icon: AlertTriangle, label: "Estoque baixo", value: data.low_stock.length, sub: "tamanhos no mínimo", onClick: () => nav("/estoque?low=1"), testid: "kpi-low-stock" },
+    insumos: { icon: Scissors, label: "Gastos insumos (mês)", value: formatBRL(data.insumos_month), onClick: () => nav("/insumos"), testid: "kpi-insumos" },
+    maintenance: { icon: Car, label: "Manutenção veículo", value: formatBRL(data.manut_month), sub: data.manut_alerts ? `${data.manut_alerts} revisão(ões) próxima(s)` : "Sem alertas", onClick: () => nav("/manutencao"), testid: "kpi-manutencao" },
   };
   const available = [
     ...tiles.map((tile) => `category:${tile.name}`),
@@ -86,9 +92,7 @@ export default function Dashboard() {
     if (id === "chart") {
       return (
         <section key={id} className="lm-card overflow-hidden col-span-full" style={{ background: colors.card_background, color: colors.card_text, borderColor: colors.card_border }}>
-          <div className="lm-card-head" style={{ background: "var(--card-header-bg)", color: "var(--card-header-text)" }}>
-            <span>Vendas · últimos {chartDays} dias</span>
-          </div>
+          <DashboardCardHeader>Vendas · últimos {chartDays} dias</DashboardCardHeader>
           <div className="h-64 p-3">
             <ResponsiveContainer width="100%" height="100%">
               {chartType === "linha" ? (
