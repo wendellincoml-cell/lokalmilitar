@@ -59,23 +59,37 @@ export function Suppliers() {
 }
 
 const total = (rows, fn) => formatBRL(rows.reduce((s, r) => s + fn(r), 0));
+const FUEL_TYPES = ["Gasolina", "Etanol", "Diesel", "GNV"];
+const recalculateTrip = (trip, changes = {}) => {
+  const updated = { ...trip, ...changes };
+  const km = Math.max(Number(updated.km || 0), 0);
+  const consumption = Number(updated.avg_consumption || 0);
+  const liters = consumption > 0 ? Math.round((km / consumption) * 100) / 100 : 0;
+  const price = Math.max(Number(updated.fuel_price_per_liter || 0), 0);
+  return { ...changes, fuel_liters: liters, fuel_cost: Math.round(liters * price * 100) / 100 };
+};
 
 export function Vehicles() {
   return (
     <CrudPage title="Veículos" subtitle="Cadastro de veículos e quilometragem acumulada" endpoint="vehicles" testid="vehicles"
-      defaults={{ active: true, current_km: 0, avg_consumption: 0 }}
+      defaults={{ active: true, current_km: 0, avg_consumption: 0, fuel_types: [] }}
       fields={[
         { key: "name", label: "Nome do veículo", required: true },
         { key: "model", label: "Modelo" },
         { key: "plate", label: "Placa" },
-        { key: "fuel_type", label: "Combustível", type: "select", options: ["Gasolina", "Etanol", "Diesel", "GNV"] },
+        {
+          key: "fuel_types", label: "Combustíveis utilizados", type: "multiselect", options: FUEL_TYPES,
+          defaultValue: (editing) => editing.fuel_type ? [editing.fuel_type] : [],
+          onChange: (value) => ({ fuel_types: value, fuel_type: value[0] || "" }),
+        },
         { key: "avg_consumption", label: "Consumo médio (km/l)", type: "number" },
         { key: "current_km", label: "Quilometragem atual", type: "number" },
         { key: "active", label: "Veículo ativo", type: "checkbox" },
       ]}
       columns={[
         { key: "name", label: "VEÍCULO" }, { key: "model", label: "MODELO" }, { key: "plate", label: "PLACA" },
-        { key: "fuel_type", label: "COMBUSTÍVEL" }, { key: "avg_consumption", label: "KM/L" }, { key: "current_km", label: "KM ATUAL" },
+        { label: "COMBUSTÍVEIS", render: (vehicle) => (vehicle.fuel_types?.length ? vehicle.fuel_types : vehicle.fuel_type ? [vehicle.fuel_type] : []).join(", ") },
+        { key: "avg_consumption", label: "KM/L" }, { key: "current_km", label: "KM ATUAL" },
         { label: "SITUAÇÃO", render: (vehicle) => vehicle.active === false ? "Inativo" : "Ativo" },
       ]} />
   );
@@ -127,32 +141,69 @@ export function Viagens() {
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
+  const [fuelPrices, setFuelPrices] = useState({});
   useEffect(() => {
-    Promise.all([api.get("/customers"), api.get("/suppliers"), api.get("/vehicles")])
-      .then(([c, s, v]) => { setCustomers(c.data); setSuppliers(s.data); setVehicles(v.data.filter((vehicle) => vehicle.active !== false)); })
+    Promise.all([api.get("/customers"), api.get("/suppliers"), api.get("/vehicles"), api.get("/settings")])
+      .then(([c, s, v, settings]) => {
+        setCustomers(c.data);
+        setSuppliers(s.data);
+        setVehicles(v.data.filter((vehicle) => vehicle.active !== false));
+        setFuelPrices(settings.data.fuel_prices || {});
+      })
       .catch(() => toast.error("Não foi possível carregar clientes, fornecedores e veículos"));
   }, []);
   const destinationOptions = (editing) => (editing.destination_type === "fornecedor" ? suppliers : customers)
     .map((entry) => ({ value: entry.id, label: entry.name }));
+  const selectedVehicle = (editing) => vehicles.find((vehicle) => vehicle.id === editing.vehicle_id);
+  const availableFuels = (editing) => {
+    const vehicle = selectedVehicle(editing);
+    const fuels = vehicle?.fuel_types?.length ? vehicle.fuel_types : vehicle?.fuel_type ? [vehicle.fuel_type] : FUEL_TYPES;
+    return editing.fuel_type && !fuels.includes(editing.fuel_type) ? [...fuels, editing.fuel_type] : fuels;
+  };
+  const prepareTripEdit = (trip) => {
+    const vehicle = vehicles.find((item) => item.id === trip.vehicle_id);
+    const fuel = trip.fuel_type || vehicle?.fuel_types?.[0] || vehicle?.fuel_type || FUEL_TYPES[0];
+    const consumption = Number(trip.avg_consumption || vehicle?.avg_consumption || 0);
+    const price = Number(trip.fuel_price_per_liter || fuelPrices[fuel] || 0);
+    return {
+      ...trip,
+      ...recalculateTrip(trip, {
+        fuel_type: fuel,
+        avg_consumption: consumption,
+        fuel_price_per_liter: price,
+      }),
+    };
+  };
   return (
     <CrudPage title="Viagens & Rotas" subtitle="Registro de rotas, combustível, pedágios e quilometragem fora das entregas" endpoint="expenses" testid="viagens"
-      filter={(r) => r.type === "VIAGEM"} defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: "Gasolina", date: new Date().toISOString().slice(0, 10) }}
+      filter={(r) => r.type === "VIAGEM"} prepareEdit={prepareTripEdit}
+      defaults={{ type: "VIAGEM", destination_type: "cliente", fuel_type: FUEL_TYPES[0], fuel_price_per_liter: Number(fuelPrices[FUEL_TYPES[0]] || 0), date: new Date().toISOString().slice(0, 10) }}
       fields={[
-        { key: "destination_type", label: "Tipo de destino", type: "select", options: [{ value: "cliente", label: "Cliente" }, { value: "fornecedor", label: "Fornecedor" }], onChange: (value) => ({ destination_type: value, destination_id: "", km: 0, route: "", description: "" }) },
+        { key: "destination_type", label: "Tipo de destino", type: "select", options: [{ value: "cliente", label: "Cliente" }, { value: "fornecedor", label: "Fornecedor" }], onChange: (value, editing) => ({ destination_type: value, destination_id: "", ...recalculateTrip(editing, { km: 0 }), route: "", description: "" }) },
         { key: "destination_id", label: "Cliente / fornecedor cadastrado", type: "select", options: destinationOptions, onChange: (value, editing) => {
           const entry = (editing.destination_type === "fornecedor" ? suppliers : customers).find((item) => item.id === value);
-          return { destination_id: value, km: Number(entry?.distance_km || 0) * 2, route: entry ? `Depósito → ${entry.address || entry.name} → Depósito` : "", description: entry ? `Viagem até ${entry.name}` : "" };
+          return { destination_id: value, ...recalculateTrip(editing, { km: Number(entry?.distance_km || 0) * 2 }), route: entry ? `Depósito → ${entry.address || entry.name} → Depósito` : "", description: entry ? `Viagem até ${entry.name}` : "" };
         } },
         { key: "description", label: "Destino / Objetivo", required: true, wide: true },
         { key: "route", label: "Rota (origem → destino)", wide: true },
         { key: "date", label: "Data", type: "date" },
-        { key: "vehicle_id", label: "Veículo", type: "select", options: vehicles.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.name}${vehicle.plate ? ` · ${vehicle.plate}` : ""}` })), onChange: (value) => ({ vehicle_id: value, avg_consumption: Number(vehicles.find((vehicle) => vehicle.id === value)?.avg_consumption || 0) }) },
-        { key: "km", label: "KM rodados (ida e volta)", type: "number" },
-        { key: "fuel_type", label: "Combustível", type: "select", options: ["Gasolina", "Etanol", "Diesel", "GNV"] },
-        { key: "avg_consumption", label: "Consumo médio (km/l)", type: "number" },
+        { key: "vehicle_id", label: "Veículo", type: "select", options: vehicles.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.name}${vehicle.plate ? ` · ${vehicle.plate}` : ""}` })), onChange: (value, editing) => {
+          const vehicle = vehicles.find((item) => item.id === value);
+          const fuels = vehicle?.fuel_types?.length ? vehicle.fuel_types : vehicle?.fuel_type ? [vehicle.fuel_type] : [];
+          const fuel = fuels.includes(editing.fuel_type) ? editing.fuel_type : fuels[0] || editing.fuel_type;
+          const price = Number(fuelPrices[fuel] ?? editing.fuel_price_per_liter ?? 0);
+          const consumption = Number(vehicle?.avg_consumption || 0);
+          return { vehicle_id: value, fuel_type: fuel, avg_consumption: consumption, fuel_price_per_liter: price, ...recalculateTrip(editing, { fuel_type: fuel, avg_consumption: consumption, fuel_price_per_liter: price }) };
+        } },
+        { key: "km", label: "KM rodados (ida e volta)", type: "number", onChange: (value, editing) => ({ km: value, ...recalculateTrip(editing, { km: value }) }) },
+        { key: "fuel_type", label: "Combustível", type: "select", options: availableFuels, onChange: (value, editing) => {
+          const price = Number(fuelPrices[value] || 0);
+          return { fuel_type: value, fuel_price_per_liter: price, ...recalculateTrip(editing, { fuel_type: value, fuel_price_per_liter: price }) };
+        } },
+        { key: "avg_consumption", label: "Consumo médio (km/l)", type: "number", onChange: (value, editing) => ({ avg_consumption: value, ...recalculateTrip(editing, { avg_consumption: value }) }) },
         { key: "fuel_liters", label: "Litros estimados", type: "number", readOnly: true },
-        { key: "fuel_price_per_liter", label: "Preço por litro (R$)", type: "number" },
-        { key: "fuel_cost", label: "Gasto combustível (R$)", type: "number" },
+        { key: "fuel_price_per_liter", label: "Preço por litro (R$)", type: "number", onChange: (value, editing) => ({ fuel_price_per_liter: value, ...recalculateTrip(editing, { fuel_price_per_liter: value }) }) },
+        { key: "fuel_cost", label: "Gasto combustível (R$)", type: "number", readOnly: true },
         { key: "toll_cost", label: "Pedágios (R$)", type: "number" },
         { key: "amount", label: "Outros gastos (R$)", type: "number" },
       ]}

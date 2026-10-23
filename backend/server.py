@@ -10,6 +10,7 @@ import hashlib
 import jwt
 import bcrypt
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 from zoneinfo import ZoneInfo
@@ -20,6 +21,9 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from pymongo.errors import DuplicateKeyError
+
+FUEL_TYPES = ("Gasolina", "Etanol", "Diesel", "GNV")
+DEFAULT_FUEL_PRICES = {fuel_type: 0 for fuel_type in FUEL_TYPES}
 
 # ---------- DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -287,11 +291,20 @@ async def _prepare_trip(doc: dict) -> dict:
         if not vehicle:
             raise HTTPException(400, "Veículo não encontrado ou inativo")
         doc["vehicle_name"] = vehicle["name"]
+        vehicle_fuels = vehicle.get("fuel_types") or ([vehicle["fuel_type"]] if vehicle.get("fuel_type") else [])
+        if vehicle_fuels:
+            if doc.get("fuel_type") and doc["fuel_type"] not in vehicle_fuels:
+                raise HTTPException(400, "Combustível não cadastrado para este veículo")
+            doc["fuel_type"] = doc.get("fuel_type") or vehicle_fuels[0]
         doc["avg_consumption"] = float(doc.get("avg_consumption") or vehicle.get("avg_consumption") or 0)
     consumption = float(doc.get("avg_consumption") or 0)
     km = max(float(doc.get("km") or 0), 0)
     doc["fuel_liters"] = round(km / consumption, 2) if consumption > 0 else 0
     price = max(float(doc.get("fuel_price_per_liter") or 0), 0)
+    if price == 0 and doc.get("fuel_type"):
+        settings = await db.settings.find_one({"id": "singleton"}, {"_id": 0, "fuel_prices": 1})
+        price = max(float((settings or {}).get("fuel_prices", {}).get(doc["fuel_type"]) or 0), 0)
+        doc["fuel_price_per_liter"] = price
     if price > 0:
         doc["fuel_cost"] = round(doc["fuel_liters"] * price, 2)
     return doc
@@ -460,6 +473,7 @@ class Vehicle(BaseModel):
     model: Optional[str] = None
     plate: Optional[str] = None
     fuel_type: Optional[str] = None
+    fuel_types: List[str] = []
     avg_consumption: float = 0
     current_km: float = 0
     active: bool = True
@@ -540,6 +554,7 @@ class Settings(BaseModel):
     instagram: str = "@lokalmilitar"
     address: str = "Rua Salustiano Silva, Nº 550, H - 21745590 - Rio de Janeiro, RJ"
     pix_key: str = ""
+    fuel_prices: dict = Field(default_factory=lambda: DEFAULT_FUEL_PRICES.copy())
     background_color: str = "#F5F5F5"
     print_header_html: str = ""
     print_footer_text: str = "Obrigado pela preferência! - Lokal Militar"
@@ -568,6 +583,12 @@ def make_crud(coll_name: str, Model):
     async def create(payload: dict, user: dict = Depends(get_current_user)):
         obj = Model(**payload)
         doc = obj.model_dump()
+        if coll_name == "vehicles":
+            fuel_types = doc.get("fuel_types") or ([doc["fuel_type"]] if doc.get("fuel_type") else [])
+            if any(fuel_type not in FUEL_TYPES for fuel_type in fuel_types):
+                raise HTTPException(400, "Combustível inválido")
+            doc["fuel_types"] = fuel_types
+            doc["fuel_type"] = fuel_types[0] if fuel_types else None
         if coll_name == "vendors" and doc.get("signature"):
             signature = doc["signature"]
             if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
@@ -592,6 +613,16 @@ def make_crud(coll_name: str, Model):
     @router.put("/{item_id}")
     async def update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
         payload.pop("id", None)
+        if coll_name == "vehicles":
+            current = await db.vehicles.find_one({"id": item_id}, {"_id": 0})
+            if not current:
+                raise HTTPException(404, "Not found")
+            updated = {**current, **payload}
+            fuel_types = updated.get("fuel_types") or ([updated["fuel_type"]] if updated.get("fuel_type") else [])
+            if any(fuel_type not in FUEL_TYPES for fuel_type in fuel_types):
+                raise HTTPException(400, "Combustível inválido")
+            payload["fuel_types"] = fuel_types
+            payload["fuel_type"] = fuel_types[0] if fuel_types else None
         if coll_name == "vendors" and payload.get("signature"):
             signature = payload["signature"]
             if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
@@ -1398,6 +1429,17 @@ async def get_settings(user: dict = Depends(get_current_user)):
 
 @api.put("/settings")
 async def update_settings(payload: dict, user: dict = Depends(get_current_user)):
+    if "fuel_prices" in payload:
+        prices = payload["fuel_prices"]
+        if not isinstance(prices, dict) or any(fuel not in FUEL_TYPES for fuel in prices):
+            raise HTTPException(400, "Valores médios de combustível inválidos")
+        try:
+            normalized_prices = {fuel: float(price) for fuel, price in prices.items()}
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Informe um preço válido para cada combustível")
+        if any(not math.isfinite(price) or price < 0 for price in normalized_prices.values()):
+            raise HTTPException(400, "Os preços dos combustíveis devem ser números não negativos")
+        payload["fuel_prices"] = normalized_prices
     payload["id"] = "singleton"
     await db.settings.update_one({"id": "singleton"}, {"$set": payload}, upsert=True)
     return await db.settings.find_one({"id": "singleton"}, {"_id": 0})

@@ -243,6 +243,63 @@ def test_settings_persist(admin):
     assert admin.get(f"{BASE_URL}/api/settings").json()["background_color"] == "#E8E4D9"
     admin.put(f"{BASE_URL}/api/settings", json={"background_color": old.get("background_color", "#F5F5F5")})
 
+def test_vehicle_fuels_and_trip_cost_use_settings(admin):
+    old_fuel_prices = admin.get(f"{BASE_URL}/api/settings").json().get("fuel_prices", {})
+    invalid_price = admin.put(
+        f"{BASE_URL}/api/settings",
+        json={"fuel_prices": {"Diesel": -1}},
+    )
+    assert invalid_price.status_code == 400, invalid_price.text
+    settings_update = admin.put(
+        f"{BASE_URL}/api/settings",
+        json={"fuel_prices": {**old_fuel_prices, "Diesel": 6.5}},
+    )
+    assert settings_update.status_code == 200, settings_update.text
+
+    vehicle_response = admin.post(
+        f"{BASE_URL}/api/vehicles",
+        json={
+            "name": f"TEST_Combustivel_{uuid.uuid4().hex[:6]}",
+            "avg_consumption": 12,
+            "fuel_types": ["Gasolina", "Diesel"],
+        },
+    )
+    assert vehicle_response.status_code == 200, vehicle_response.text
+    vehicle = vehicle_response.json()
+    CREATED["vehicles"].append(vehicle["id"])
+    assert vehicle["fuel_types"] == ["Gasolina", "Diesel"]
+
+    trip_response = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "VIAGEM",
+            "description": "TEST_Consumo Diesel",
+            "vehicle_id": vehicle["id"],
+            "fuel_type": "Diesel",
+            "km": 120,
+        },
+    )
+    assert trip_response.status_code == 200, trip_response.text
+    trip = trip_response.json()
+    CREATED["expenses"].append(trip["id"])
+    assert trip["avg_consumption"] == 12
+    assert trip["fuel_liters"] == 10
+    assert trip["fuel_price_per_liter"] == 6.5
+    assert trip["fuel_cost"] == 65
+
+    invalid_fuel = admin.post(
+        f"{BASE_URL}/api/expenses",
+        json={
+            "type": "VIAGEM",
+            "description": "TEST_Combustível incompatível",
+            "vehicle_id": vehicle["id"],
+            "fuel_type": "GNV",
+            "km": 10,
+        },
+    )
+    assert invalid_fuel.status_code == 400, invalid_fuel.text
+    admin.put(f"{BASE_URL}/api/settings", json={"fuel_prices": old_fuel_prices})
+
 def test_order_number_sequence_is_admin_configurable_without_decreasing(admin):
     sequence = admin.get(f"{BASE_URL}/api/orders/number-sequence")
     assert sequence.status_code == 200, sequence.text

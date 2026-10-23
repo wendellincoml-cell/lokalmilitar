@@ -26,7 +26,6 @@ const CategoryCard = ({ cat, onClick, colors, textColor, position }) => {
       <DashboardCardHeader icon={Icon} iconColor={colors.chart_accent} textColor={textColor}>{cat.name}</DashboardCardHeader>
       <div className="px-4 py-3">
         <div className="flex items-baseline gap-2"><span className="font-head text-3xl font-bold">{Math.round(cat.qty)}</span><span className="text-sm" style={{ color: textColor || "var(--muted-text-color)" }}>{UNIT[cat.name] || "unid"}</span></div>
-        <div className="text-sm" style={{ color: textColor || "var(--muted-text-color)" }}>Valor: <b style={{ color: textColor || "var(--system-text-color)" }}>{formatBRL(cat.value)}</b></div>
       </div>
     </button>
   );

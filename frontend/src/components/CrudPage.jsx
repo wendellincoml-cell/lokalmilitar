@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions }) => {
+export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -62,7 +62,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
               <tr key={r.id} className="border-t hover:bg-neutral-50" data-testid={`${testid}-row`}>
                 {columns.map((c) => <td key={c.label} className="p-2">{c.render ? c.render(r) : r[c.key]}</td>)}
                 <td className="p-2 whitespace-nowrap">
-                  <button className="p-1 hover:bg-neutral-200" onClick={() => setEditing({ ...r })} data-testid={`${testid}-edit-${r.id}`}><Edit size={13} /></button>
+                  <button className="p-1 hover:bg-neutral-200" onClick={() => setEditing(prepareEdit ? prepareEdit(r) : { ...r })} data-testid={`${testid}-edit-${r.id}`}><Edit size={13} /></button>
                   {rowActions?.(r, load)}
                   <button className="p-1 hover:bg-red-100 text-red-700" onClick={() => remove(r.id)} data-testid={`${testid}-delete-${r.id}`}><Trash2 size={13} /></button>
                 </td>
@@ -82,7 +82,32 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
               {fields.filter((f) => !(typeof f.hidden === "function" ? f.hidden(editing) : f.hidden)).map((f) => (
                 <label key={f.key} className={f.wide ? "md:col-span-2" : ""}>
                   <div className="text-[11px] font-mono text-neutral-500 mb-1">{f.label}{f.required ? " *" : ""}</div>
-                  {f.type === "select" ? (
+                  {f.type === "multiselect" ? (
+                    <div className="crud-input space-y-1">
+                      {(typeof f.options === "function" ? f.options(editing) : f.options || []).map((option) => {
+                        const value = option.value ?? option;
+                        const label = option.label ?? option;
+                        const selectedValues = editing[f.key] ?? f.defaultValue?.(editing) ?? [];
+                        return (
+                          <div key={value} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedValues.includes(value)}
+                              onChange={(event) => {
+                                const nextValues = event.target.checked
+                                  ? [...selectedValues, value]
+                                  : selectedValues.filter((item) => item !== value);
+                                setEditing({ ...editing, ...(f.onChange ? f.onChange(nextValues, editing) : { [f.key]: nextValues }) });
+                              }}
+                              aria-label={label}
+                              data-testid={`field-${f.key}-${value}`}
+                            />
+                            <span>{label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : f.type === "select" ? (
                     <select className="crud-input" value={editing[f.key] ?? ""} onChange={(e) => {
                       const value = e.target.value;
                       setEditing({ ...editing, ...(f.onChange ? f.onChange(value, editing) : { [f.key]: value }) });
@@ -91,12 +116,12 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                       {(typeof f.options === "function" ? f.options(editing) : f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
                     </select>
                   ) : f.type === "textarea" ? (
-                    <textarea className="crud-input" rows={3} value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} data-testid={`field-${f.key}`} />
+                    <textarea className="crud-input" rows={3} value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.value, editing) : { [f.key]: e.target.value }) })} data-testid={`field-${f.key}`} />
                   ) : f.type === "checkbox" ? (
-                    <input className="crud-input" type="checkbox" checked={!!editing[f.key]} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.checked })} data-testid={`field-${f.key}`} />
+                    <input className="crud-input" type="checkbox" checked={!!editing[f.key]} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.checked, editing) : { [f.key]: e.target.checked }) })} data-testid={`field-${f.key}`} />
                   ) : (
                     <input className="crud-input" type={f.type || "text"} step={f.type === "number" ? "0.01" : undefined} readOnly={f.readOnly}
-                      value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} data-testid={`field-${f.key}`} />
+                      value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, ...(f.onChange ? f.onChange(e.target.value, editing) : { [f.key]: e.target.value }) })} data-testid={`field-${f.key}`} />
                   )}
                 </label>
               ))}

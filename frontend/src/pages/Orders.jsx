@@ -560,21 +560,25 @@ export default function Orders({ mode }) {
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead><tr className="border-b text-left"><th className="py-2">Produto</th><th className="py-2">Tamanho</th><th className="py-2 text-right">Qtd.</th><th className="py-2 text-right">Subtotal</th></tr></thead>
+                        <thead><tr className="border-b text-left"><th className="py-2">Produto</th><th className="py-2">Tamanho</th><th className="py-2 text-right">Qtd.</th></tr></thead>
                         <tbody>
                           {(fulfillment.order.items || []).map((item, index) => (
                             <tr key={`${item.product_id || item.name}-${index}`} className="border-b last:border-0">
                               <td className="py-2">{item.name || prodById[item.product_id]?.name || "Produto"}</td>
                               <td className="py-2">{item.size || "—"}</td>
                               <td className="py-2 text-right">{item.qty || 0}</td>
-                              <td className="py-2 text-right">{formatBRL(item.subtotal ?? Number(item.qty || 0) * Number(item.unit_price || 0))}</td>
                             </tr>
                           ))}
                           {(fulfillment.order.items || []).length === 0 && (
-                            <tr><td colSpan={4} className="py-3 text-center text-neutral-500">Nenhum item registrado neste pedido.</td></tr>
+                            <tr><td colSpan={3} className="py-3 text-center text-neutral-500">Nenhum item registrado neste pedido.</td></tr>
                           )}
                         </tbody>
-                        <tfoot><tr><th colSpan={3} className="pt-2 text-right">Total do pedido</th><th className="pt-2 text-right">{formatBRL(fulfillment.order.total || 0)}</th></tr></tfoot>
+                        <tfoot>
+                          <tr className="border-t">
+                            <th colSpan={2} className="pt-2 text-right">Quantidade total de produtos</th>
+                            <th className="pt-2 text-right">{(fulfillment.order.items || []).reduce((quantity, item) => quantity + Number(item.qty || 0), 0)}</th>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                     {fulfillment.order.notes && <p className="border-t pt-2 text-sm"><strong>Observações:</strong> {fulfillment.order.notes}</p>}

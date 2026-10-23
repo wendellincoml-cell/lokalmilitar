@@ -33,6 +33,8 @@ const Swatches = ({ colors, current, onPick, prefix }) => (
 );
 const HEAD_FONTS = ["Oswald", "Bebas Neue", "Barlow Condensed", "Teko", "Black Ops One", "Saira Stencil One", "Rajdhani", "Roboto Condensed", "Archivo"];
 const BODY_FONTS = ["Barlow", "IBM Plex Sans", "Source Sans 3", "Nunito Sans", "Roboto Condensed", "Archivo", "Rajdhani"];
+const FUEL_TYPES = ["Gasolina", "Etanol", "Diesel", "GNV"];
+const DEFAULT_FUEL_PRICES = Object.fromEntries(FUEL_TYPES.map((fuel) => [fuel, 0]));
 const THEME_COLORS = [
   ["title_color", "Títulos"],
   ["text_color", "Textos"],
@@ -420,6 +422,20 @@ export default function Settings() {
     }
   };
   const saveStore = async () => { await api.put("/settings", s); toast.success("Dados salvos"); };
+  const saveFuelPrices = async () => {
+    const prices = Object.fromEntries(FUEL_TYPES.map((fuel) => [fuel, Number(s.fuel_prices?.[fuel] || 0)]));
+    if (Object.values(prices).some((price) => !Number.isFinite(price) || price < 0)) {
+      toast.error("Informe valores válidos e não negativos para os combustíveis");
+      return;
+    }
+    try {
+      const { data } = await api.put("/settings", { fuel_prices: prices });
+      setS({ ...s, ...data });
+      toast.success("Preços médios dos combustíveis salvos");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível salvar os preços dos combustíveis");
+    }
+  };
   const updateUser = async (id) => {
     const update = userEdits[id];
     try {
@@ -486,6 +502,33 @@ export default function Settings() {
         onChange={applyDashboardPreferences}
         onSave={saveDashboard}
       />
+
+      {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="fuel-price-settings">
+        <div>
+          <h2 className="lokal-stencil text-sm mb-1">Valor médio dos combustíveis</h2>
+          <p className="text-xs text-neutral-500">Os valores serão sugeridos automaticamente nas viagens conforme o combustível selecionado.</p>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          {FUEL_TYPES.map((fuel) => (
+            <label key={fuel} className="text-sm">
+              {fuel} (R$/litro)
+              <input
+                className="lm-input mt-1"
+                type="number"
+                min="0"
+                step="0.01"
+                value={s.fuel_prices?.[fuel] ?? DEFAULT_FUEL_PRICES[fuel]}
+                onChange={(event) => setS({
+                  ...s,
+                  fuel_prices: { ...DEFAULT_FUEL_PRICES, ...s.fuel_prices, [fuel]: event.target.value },
+                })}
+                data-testid={`fuel-price-${fuel}`}
+              />
+            </label>
+          ))}
+        </div>
+        <button className="lokal-btn-primary" onClick={saveFuelPrices} data-testid="save-fuel-prices">SALVAR VALORES</button>
+      </section>}
 
       {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="order-number-settings">
         <div>
