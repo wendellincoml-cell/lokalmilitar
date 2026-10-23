@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Shirt, Footprints, Package, Award, ClipboardList, Clock, Users, CircleDollarSign, AlertTriangle, Scissors, Car, Shield, Star, ClipboardCheck, Printer } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
-import { DASHBOARD_KPIS, getDashboardGridPositions } from "@/pages/dashboardPreferences";
+import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
@@ -135,7 +135,12 @@ export default function Dashboard() {
     "chart",
   ];
   const displayOrder = [...order.filter((id) => available.includes(id)), ...available.filter((id) => !order.includes(id))];
-  const gridPositions = getDashboardGridPositions(displayOrder, available.filter((id) => id !== "chart"), configuredGridPositions);
+  const gridPositions = getVisibleDashboardGridPositions(
+    displayOrder,
+    available.filter((id) => id !== "chart"),
+    configuredGridPositions,
+    visibility,
+  );
   const renderItem = (id) => {
     if (id.startsWith("category:")) {
       const categoryName = id.slice("category:".length);

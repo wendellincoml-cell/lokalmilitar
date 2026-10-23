@@ -80,3 +80,19 @@ export function getDashboardGridPositions(order, itemIds, configuredPositions = 
   }
   return positions;
 }
+
+export function getVisibleDashboardGridPositions(order, itemIds, configuredPositions = {}, visibility = {}) {
+  const positions = getDashboardGridPositions(order, itemIds, configuredPositions);
+  const visibleItems = itemIds
+    .filter((id) => visibility[id] !== false)
+    .sort((firstId, secondId) => {
+      const first = positions[firstId];
+      const second = positions[secondId];
+      return first.row - second.row || first.column - second.column;
+    });
+
+  return Object.fromEntries(visibleItems.map((id, index) => [
+    id,
+    { row: Math.floor(index / 4) + 1, column: (index % 4) + 1 },
+  ]));
+}
