@@ -62,6 +62,13 @@ export default function Orders({ mode }) {
   const openNew = () => { setEditing({ ...BLANK_ORDER, ...(isTrocas ? { type: "TROCA" } : {}) }); setOpen(true); };
   const shownOrders = orders.filter(o => isTrocas ? ["TROCA","DEVOLUCAO"].includes(o.type) : true);
   const openEdit = (o) => { setEditing(JSON.parse(JSON.stringify(o))); setOpen(true); };
+  const startFulfillment = (order, deliveryType = "ENTREGA") => {
+    setFulfillment({ order, delivery_type: deliveryType, vehicle_id: "", signature: "", step: "review" });
+  };
+  const closeFulfillment = () => {
+    window.screen?.orientation?.unlock?.();
+    setFulfillment(null);
+  };
 
   const addItem = () => setEditing(e => ({ ...e, items:[...e.items, { product_id:"", name:"", size:"", qty:1, unit_price:0 }] }));
   const setItem = (i, patch) => setEditing(e => {
@@ -112,6 +119,11 @@ export default function Orders({ mode }) {
   };
 
   const changeOrderStatus = async (order, status) => {
+    if (status === order.status) return;
+    if (!["Entregue", "Retirado"].includes(order.status) && ["Entregue", "Retirado"].includes(status)) {
+      startFulfillment(order, status === "Retirado" ? "RETIRADA" : "ENTREGA");
+      return;
+    }
     try {
       await api.put(`/orders/${order.id}`, { status });
       toast.success(`Status do pedido #${order.number} atualizado`);
@@ -166,6 +178,10 @@ export default function Orders({ mode }) {
 
   const completeOrder = async () => {
     if (!fulfillment) return;
+    if (!fulfillment.signature) {
+      toast.error("Solicite a assinatura do cliente antes de concluir o pedido");
+      return;
+    }
     try {
       await api.post(`/orders/${fulfillment.order.id}/fulfill`, {
         delivery_type: fulfillment.delivery_type,
@@ -178,10 +194,19 @@ export default function Orders({ mode }) {
         CORREIO: "Pedido enviado por correio/transportadora e estoque atualizado",
       };
       toast.success(completionMessage[fulfillment.delivery_type]);
-      setFulfillment(null);
+      closeFulfillment();
       load();
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível concluir o pedido");
+    }
+  };
+  const beginSignature = async () => {
+    setFulfillment((current) => current ? { ...current, step: "signature" } : current);
+    try {
+      if (!window.screen?.orientation?.lock) return;
+      await window.screen.orientation.lock("landscape");
+    } catch {
+      // The browser may not support locking orientation; the customer can rotate the device manually.
     }
   };
   const runPrint = (pdf) => {
@@ -297,7 +322,7 @@ export default function Orders({ mode }) {
                 <td className="flex gap-1 py-2 flex-wrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>openEdit(o)} data-testid={`edit-order-${o.number}`}><Edit size={13}/></button>
                   {!["Entregue", "Retirado"].includes(o.status) && (
-                    <button className="p-1 hover:bg-green-100 text-green-800" onClick={()=>setFulfillment({ order:o, delivery_type:"ENTREGA", vehicle_id:"", signature:o.signature || cust(o.customer_id)?.signature || "" })} title="Registrar entrega ou retirada" data-testid={`fulfill-order-${o.number}`}><Truck size={13}/></button>
+                    <button className="p-1 hover:bg-green-100 text-green-800" onClick={()=>startFulfillment(o)} title="Registrar entrega ou retirada" data-testid={`fulfill-order-${o.number}`}><Truck size={13}/></button>
                   )}
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>doPrint(o,"a4")} data-testid={`print-a4-${o.number}`}><Printer size={13}/></button>
                   <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"80")} data-testid={`print-80-${o.number}`}>80mm</button>
@@ -510,35 +535,84 @@ export default function Orders({ mode }) {
         </SheetContent>
       </Sheet>
 
-      <Dialog open={!!fulfillment} onOpenChange={(isOpen) => !isOpen && setFulfillment(null)}>
-        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto" data-testid="order-fulfillment-dialog">
-          <DialogHeader><DialogTitle className="font-head">Concluir pedido #{fulfillment?.order.number}</DialogTitle></DialogHeader>
+      <Dialog open={!!fulfillment} onOpenChange={(isOpen) => !isOpen && closeFulfillment()}>
+        <DialogContent
+          className={fulfillment?.step === "signature"
+            ? "w-screen h-[100dvh] max-w-none max-h-none overflow-y-auto rounded-none p-4 sm:p-6"
+            : "max-w-xl max-h-[90vh] overflow-y-auto"}
+          data-testid="order-fulfillment-dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="font-head">
+              {fulfillment?.step === "signature"
+                ? `Assinatura do cliente · Pedido #${fulfillment?.order.number}`
+                : `Conferir pedido #${fulfillment?.order.number}`}
+            </DialogTitle>
+          </DialogHeader>
           {fulfillment && (
             <div className="space-y-4">
-              <label className="block text-sm">Como o cliente receberá o pedido?
-                <select className="input mt-1" value={fulfillment.delivery_type}
-                  onChange={(event) => setFulfillment({ ...fulfillment, delivery_type: event.target.value, vehicle_id: "" })}
-                  data-testid="fulfillment-delivery-type">
-                  <option value="ENTREGA">Entrega</option>
-                  <option value="RETIRADA">Retirada pelo cliente</option>
-                  <option value="CORREIO">Correio/transportadora</option>
-                </select>
-              </label>
-              {fulfillment.delivery_type === "ENTREGA" && (
-                <label className="block text-sm">Veículo utilizado
-                  <select className="input mt-1" value={fulfillment.vehicle_id}
-                    onChange={(event) => setFulfillment({ ...fulfillment, vehicle_id: event.target.value })}
-                    data-testid="fulfillment-vehicle">
-                    <option value="">— Não informar veículo —</option>
-                    {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name}{vehicle.plate ? ` · ${vehicle.plate}` : ""}</option>)}
-                  </select>
-                </label>
+              {fulfillment.step === "review" ? (
+                <>
+                  <div className="rounded border p-3 space-y-2">
+                    <div className="flex flex-wrap justify-between gap-2 text-sm">
+                      <span><strong>Cliente:</strong> {fulfillment.order.customer_name || cust(fulfillment.order.customer_id)?.name || "—"}</span>
+                      <span><strong>Tipo:</strong> {fulfillment.order.type}</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead><tr className="border-b text-left"><th className="py-2">Produto</th><th className="py-2">Tamanho</th><th className="py-2 text-right">Qtd.</th><th className="py-2 text-right">Subtotal</th></tr></thead>
+                        <tbody>
+                          {(fulfillment.order.items || []).map((item, index) => (
+                            <tr key={`${item.product_id || item.name}-${index}`} className="border-b last:border-0">
+                              <td className="py-2">{item.name || prodById[item.product_id]?.name || "Produto"}</td>
+                              <td className="py-2">{item.size || "—"}</td>
+                              <td className="py-2 text-right">{item.qty || 0}</td>
+                              <td className="py-2 text-right">{formatBRL(item.subtotal ?? Number(item.qty || 0) * Number(item.unit_price || 0))}</td>
+                            </tr>
+                          ))}
+                          {(fulfillment.order.items || []).length === 0 && (
+                            <tr><td colSpan={4} className="py-3 text-center text-neutral-500">Nenhum item registrado neste pedido.</td></tr>
+                          )}
+                        </tbody>
+                        <tfoot><tr><th colSpan={3} className="pt-2 text-right">Total do pedido</th><th className="pt-2 text-right">{formatBRL(fulfillment.order.total || 0)}</th></tr></tfoot>
+                      </table>
+                    </div>
+                    {fulfillment.order.notes && <p className="border-t pt-2 text-sm"><strong>Observações:</strong> {fulfillment.order.notes}</p>}
+                  </div>
+                  <label className="block text-sm">Como o cliente receberá o pedido?
+                    <select className="input mt-1" value={fulfillment.delivery_type}
+                      onChange={(event) => setFulfillment({ ...fulfillment, delivery_type: event.target.value, vehicle_id: "" })}
+                      data-testid="fulfillment-delivery-type">
+                      <option value="ENTREGA">Entrega</option>
+                      <option value="RETIRADA">Retirada pelo cliente</option>
+                      <option value="CORREIO">Correio/transportadora</option>
+                    </select>
+                  </label>
+                  {fulfillment.delivery_type === "ENTREGA" && (
+                    <label className="block text-sm">Veículo utilizado
+                      <select className="input mt-1" value={fulfillment.vehicle_id}
+                        onChange={(event) => setFulfillment({ ...fulfillment, vehicle_id: event.target.value })}
+                        data-testid="fulfillment-vehicle">
+                        <option value="">— Não informar veículo —</option>
+                        {vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name}{vehicle.plate ? ` · ${vehicle.plate}` : ""}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button className="lm-btn lm-btn-outline" onClick={closeFulfillment}>Cancelar</button>
+                    <button className="lm-btn lm-btn-olive" onClick={beginSignature} data-testid="begin-order-signature">Conferido · Assinar</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-neutral-600">Peça ao cliente para assinar no espaço abaixo. No celular, gire o aparelho para a horizontal.</p>
+                  <CustomerSignaturePad initialValue={fulfillment.signature} onChange={(signature) => setFulfillment((current) => current ? { ...current, signature } : current)} />
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <button className="lm-btn lm-btn-outline" onClick={() => setFulfillment((current) => current ? { ...current, step: "review" } : current)}>Voltar à conferência</button>
+                    <button className="lm-btn lm-btn-olive" onClick={completeOrder} data-testid="confirm-order-fulfillment"><Check size={14}/>Confirmar e lançar estoque</button>
+                  </div>
+                </>
               )}
-              <CustomerSignaturePad initialValue={fulfillment.signature} onChange={(signature) => setFulfillment((current) => current ? { ...current, signature } : current)} />
-              <div className="flex justify-end gap-2">
-                <button className="lm-btn lm-btn-outline" onClick={() => setFulfillment(null)}>Cancelar</button>
-                <button className="lm-btn lm-btn-olive" onClick={completeOrder} data-testid="confirm-order-fulfillment"><Check size={14}/>Confirmar e lançar estoque</button>
-              </div>
             </div>
           )}
         </DialogContent>
