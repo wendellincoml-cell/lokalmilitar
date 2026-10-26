@@ -418,7 +418,7 @@ class Product(BaseModel):
     shelf: Optional[str] = None
     photo: Optional[str] = None  # base64 or url
     sizes: List[ProductSize] = []
-    linked_ids: List[str] = []  # produtos em que este se desmonta (ex: FARDA -> CALÇA + GANDOLA)
+    linked_ids: List[str] = []  # componentes usados para montagem e desmontagem reversa
     created_at: str = Field(default_factory=now_iso)
 
 class Customer(BaseModel):
@@ -558,6 +558,10 @@ class OrderNumberSequenceUpdate(BaseModel):
 class DayClosureInput(BaseModel):
     vehicle_id: str
     current_km: float = Field(ge=0)
+
+class ManualMontageInput(BaseModel):
+    size: str
+    qty: int = Field(default=1, ge=1)
 
 class DataResetInput(BaseModel):
     groups: List[str]
@@ -1058,6 +1062,48 @@ async def _desmontar(parent: dict, size, reason: str, order_id=None) -> List[str
         names.append(child.get("name"))
     return names
 
+async def _montar(parent: dict, size, reason: str) -> List[str]:
+    """Remove one of each linked component and add one assembled parent unit."""
+    component_ids = parent.get("linked_ids") or []
+    if not component_ids:
+        raise HTTPException(400, "Produto sem vínculos para montagem")
+    if len(component_ids) != len(set(component_ids)):
+        raise HTTPException(400, "O produto possui componentes vinculados duplicados")
+
+    components = []
+    for component_id in component_ids:
+        component = await db.products.find_one({"id": component_id}, {"_id": 0})
+        if not component:
+            raise HTTPException(400, f"Produto vinculado não encontrado: {component_id}")
+        if not any(item.get("size") == size for item in component.get("sizes", [])):
+            raise HTTPException(
+                400,
+                f"Tamanho {size} não cadastrado no componente {component.get('name')}",
+            )
+        available = await _stock_of(component_id, size)
+        if available < 1:
+            raise HTTPException(
+                400,
+                f"Estoque insuficiente de {component.get('name')} tamanho {size}",
+            )
+        components.append(component)
+
+    if not any(item.get("size") == size for item in parent.get("sizes", [])):
+        raise HTTPException(400, f"Tamanho {size} não cadastrado no produto {parent.get('name')}")
+
+    for component in components:
+        await _change_stock(component["id"], size, -1)
+        await _log_mov(
+            component,
+            size,
+            1,
+            "MONTAGEM_SAIDA",
+            f"Montagem de {parent.get('name')} {size}",
+        )
+    await _change_stock(parent["id"], size, 1)
+    await _log_mov(parent, size, 1, "MONTAGEM_ENTRADA", reason)
+    return [component.get("name") for component in components]
+
 async def _cover_shortage(prod: dict, size, qty: float, order: dict, log: List[str]):
     """If stock is insufficient, disassemble linked parent products of the same size."""
     missing = qty - max(await _stock_of(prod["id"], size), 0)
@@ -1076,7 +1122,7 @@ async def _cover_shortage(prod: dict, size, qty: float, order: dict, log: List[s
 # ---------- Stock movements ----------
 def _stock_movement_delta(movement: dict) -> float:
     qty = abs(float(movement.get("qty", 0)))
-    if movement.get("kind") in ("ENTRADA", "DESMONTAGEM_ENTRADA", "DESMONTAGEM_INV"):
+    if movement.get("kind") in ("ENTRADA", "DESMONTAGEM_ENTRADA", "DESMONTAGEM_INV", "MONTAGEM_ENTRADA"):
         return qty
     return -qty
 
@@ -1130,6 +1176,42 @@ async def desmontar_manual(pid: str, payload: dict, user: dict = Depends(get_cur
         raise HTTPException(400, f"Estoque insuficiente de {p.get('name')} tamanho {size}")
     for _ in range(qty):
         await _desmontar(p, size, "Desmontagem manual")
+    return {"ok": True}
+
+@api.post("/products/{pid}/montar")
+async def montar_manual(
+    pid: str,
+    payload: ManualMontageInput,
+    user: dict = Depends(get_current_user),
+):
+    size = payload.size
+    qty = payload.qty
+    product = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Produto não encontrado")
+    if not product.get("linked_ids"):
+        raise HTTPException(400, "Produto sem vínculos para montagem")
+    if not size:
+        raise HTTPException(400, "Selecione um tamanho")
+    if not any(item.get("size") == size for item in product.get("sizes", [])):
+        raise HTTPException(400, f"Tamanho {size} não cadastrado no produto {product.get('name')}")
+    for component_id in product["linked_ids"]:
+        component = await db.products.find_one({"id": component_id}, {"_id": 0})
+        if not component:
+            raise HTTPException(400, f"Produto vinculado não encontrado: {component_id}")
+        if not any(item.get("size") == size for item in component.get("sizes", [])):
+            raise HTTPException(
+                400,
+                f"Tamanho {size} não cadastrado no componente {component.get('name')}",
+            )
+        if await _stock_of(component_id, size) < qty:
+            raise HTTPException(
+                400,
+                f"Estoque insuficiente de {component.get('name')} tamanho {size} para montar {qty} unidade(s)",
+            )
+
+    for _ in range(qty):
+        await _montar(product, size, "Montagem manual")
     return {"ok": True}
 
 # ---------- Orders ----------

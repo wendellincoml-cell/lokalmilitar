@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
 import CustomerSignaturePad from "@/components/CustomerSignaturePad";
+import ProductSearchSelect from "@/components/ProductSearchSelect";
 
 const BLANK_ORDER = {
   type: "VENDA", status: "Orçamento", customer_id: "", customer_name: "",
@@ -433,13 +434,17 @@ export default function Orders({ mode }) {
                 </div>
                 {editing.items.map((it, i)=>(
                   <div key={i} className="grid grid-cols-4 sm:grid-cols-[repeat(15,minmax(0,1fr))] gap-2 mt-2 items-end">
-                    <select className="input col-span-4 sm:col-span-5" value={it.product_id} onChange={e=>{
-                      const p = prodById[e.target.value];
-                      setItem(i, { product_id:e.target.value, name:p?.name||"", sku:p?.sku||"", unit_price:p?.price||0 });
-                    }}>
-                      <option value="">— Produto —</option>
-                      {products.map(p=><option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
-                    </select>
+                    <ProductSearchSelect
+                      products={products}
+                      value={it.product_id}
+                      onChange={(productId) => {
+                        const product = prodById[productId];
+                        setItem(i, { product_id: productId, name: product?.name || "", sku: product?.sku || "", size: "", unit_price: product?.price || 0 });
+                      }}
+                      placeholder="Buscar produto por nome ou SKU..."
+                      className="col-span-4 sm:col-span-5"
+                      testid={`order-product-${i}`}
+                    />
                     <select className="input col-span-2 sm:col-span-2" value={it.size||""} onChange={e=>setItem(i,{size:e.target.value})} data-testid={`item-size-${i}`} aria-label={`Tamanho do item ${i + 1}`}>
                       <option value="">Tam</option>
                       {(prodById[it.product_id]?.sizes||[]).map(s=><option key={s.size} value={s.size}>{s.size} ({s.stock})</option>)}
@@ -483,14 +488,19 @@ export default function Orders({ mode }) {
                   </div>
                   {(editing.returned_items||[]).map((r,i)=>(
                     <div key={i} className="grid grid-cols-4 sm:grid-cols-12 gap-2 mt-1">
-                      <select className="input col-span-4 sm:col-span-5" value={r.product_id} onChange={e=>{
-                        const p = prodById[e.target.value]; const ri=[...editing.returned_items];
-                        ri[i] = { ...ri[i], product_id:e.target.value, name:p?.name||"", size:"" };
-                        setEditing({...editing, returned_items:ri});
-                      }}>
-                        <option value="">—</option>
-                        {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
+                      <ProductSearchSelect
+                        products={products}
+                        value={r.product_id}
+                        onChange={(productId) => {
+                          const product = prodById[productId];
+                          const returnedItems = [...editing.returned_items];
+                          returnedItems[i] = { ...returnedItems[i], product_id: productId, name: product?.name || "", size: "" };
+                          setEditing({ ...editing, returned_items: returnedItems });
+                        }}
+                        placeholder="Buscar produto por nome ou SKU..."
+                        className="col-span-4 sm:col-span-5"
+                        testid={`returned-product-${i}`}
+                      />
                       <select
                         className="input col-span-1 sm:col-span-2"
                         value={(prodById[r.product_id]?.sizes || []).some((size) => size.size === r.size) ? r.size : ""}

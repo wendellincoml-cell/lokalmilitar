@@ -4,12 +4,17 @@ import { api, formatBRL, formatDate } from "@/lib/api";
 import { toast } from "sonner";
 import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink, Plus } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import ProductSearchSelect from "@/components/ProductSearchSelect";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
   DESMONTAGEM_SAIDA: "bg-amber-100 text-amber-800", DESMONTAGEM_ENTRADA: "bg-lime-100 text-lime-800",
+  MONTAGEM_SAIDA: "bg-orange-100 text-orange-800", MONTAGEM_ENTRADA: "bg-blue-100 text-blue-800",
 };
-const KIND_LABEL = { DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)" };
+const KIND_LABEL = {
+  DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)",
+  MONTAGEM_SAIDA: "Montagem (−)", MONTAGEM_ENTRADA: "Montagem (+)",
+};
 const BLANK = { product_id: "", size: "", qty: 1, nf: "", reason: "", kind: "ENTRADA" };
 const BLANK_ENTRY_ITEM = { product_id: "", size: "", qty: 1 };
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -180,7 +185,7 @@ export default function Stock() {
 
     filtered.forEach((movement) => {
       const isOrderDismantling = movement.order_id
-        && ["DESMONTAGEM_SAIDA", "DESMONTAGEM_ENTRADA"].includes(movement.kind);
+        && ["DESMONTAGEM_SAIDA", "DESMONTAGEM_ENTRADA", "MONTAGEM_SAIDA", "MONTAGEM_ENTRADA"].includes(movement.kind);
       const key = isOrderDismantling
         ? JSON.stringify([movement.order_id, movement.product_id, movement.size, movement.kind, movement.reason])
         : movement.id;
@@ -291,9 +296,13 @@ export default function Stock() {
                             </button>
                           )}
                         </div>
-                        <select className="lm-input" value={item.product_id} onChange={(e) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, product_id: e.target.value, size: "" } : entry))} data-testid={index === 0 ? "mov-product" : `mov-product-${index}`}>
-                          <option value="">— Produto —</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
-                        </select>
+                        <ProductSearchSelect
+                          products={products}
+                          value={item.product_id}
+                          onChange={(productId) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, product_id: productId, size: "" } : entry))}
+                          inputClassName="lm-input"
+                          testid={index === 0 ? "mov-product" : `mov-product-${index}`}
+                        />
                         <div className="grid grid-cols-[1fr_120px] gap-2">
                           <select className="lm-input" value={item.size} onChange={(e) => setEntryItems(entryItems.map((entry, itemIndex) => itemIndex === index ? { ...entry, size: e.target.value } : entry))} data-testid={index === 0 ? "mov-size" : `mov-size-${index}`}>
                             <option value="">— Tamanho —</option>{(itemProduct?.sizes || []).map((s) => <option key={s.size} value={s.size}>{s.size} (atual {s.stock})</option>)}
@@ -310,9 +319,13 @@ export default function Stock() {
               </>
             ) : (
               <>
-                <select className="lm-input" value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value, size: "" })} data-testid="mov-product">
-                  <option value="">— Produto —</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
-                </select>
+                <ProductSearchSelect
+                  products={products}
+                  value={form.product_id}
+                  onChange={(productId) => setForm({ ...form, product_id: productId, size: "" })}
+                  inputClassName="lm-input"
+                  testid="mov-product"
+                />
                 <select className="lm-input" value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} data-testid="mov-size">
                   <option value="">— Tamanho —</option>{(product?.sizes || []).map((s) => <option key={s.size} value={s.size}>{s.size} (atual {s.stock})</option>)}
                 </select>

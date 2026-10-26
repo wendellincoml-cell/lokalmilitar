@@ -94,6 +94,44 @@ class TestProducts:
         assert _stock(admin, a["id"], "M") == 4
         assert _stock(admin, kit["id"], "M") == 0
 
+    def test_manual_montage_consumes_components_and_prevalidates_stock(self, admin):
+        trouser = _prod(admin, "TEST_Calca montagem", [{"size": "M", "stock": 2}])
+        jacket = _prod(admin, "TEST_Gandola montagem", [{"size": "M", "stock": 3}])
+        uniform = _prod(
+            admin,
+            "TEST_Farda montagem",
+            [{"size": "M", "stock": 0}],
+            linked_ids=[trouser["id"], jacket["id"]],
+        )
+
+        response = admin.post(
+            f"{BASE_URL}/api/products/{uniform['id']}/montar",
+            json={"size": "M", "qty": 2},
+        )
+        assert response.status_code == 200, response.text
+        assert _stock(admin, uniform["id"], "M") == 2
+        assert _stock(admin, trouser["id"], "M") == 0
+        assert _stock(admin, jacket["id"], "M") == 1
+
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        montage_movements = [
+            movement for movement in movements
+            if movement["product_id"] in {uniform["id"], trouser["id"], jacket["id"]}
+            and movement["kind"] in {"MONTAGEM_SAIDA", "MONTAGEM_ENTRADA"}
+        ]
+        assert len(montage_movements) == 6
+        assert sum(movement["kind"] == "MONTAGEM_SAIDA" for movement in montage_movements) == 4
+        assert sum(movement["kind"] == "MONTAGEM_ENTRADA" for movement in montage_movements) == 2
+
+        insufficient = admin.post(
+            f"{BASE_URL}/api/products/{uniform['id']}/montar",
+            json={"size": "M", "qty": 2},
+        )
+        assert insufficient.status_code == 400
+        assert _stock(admin, uniform["id"], "M") == 2
+        assert _stock(admin, trouser["id"], "M") == 0
+        assert _stock(admin, jacket["id"], "M") == 1
+
 
 # --- Stock movements ---
 class TestStock:

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, formatBRL } from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Scissors, Image as ImageIcon, Link2, Search } from "lucide-react";
+import { Plus, Pencil, Trash2, Scissors, PackagePlus, Image as ImageIcon, Link2, Search } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -79,14 +79,67 @@ function DesmontarDialog({ product, onClose, onDone, byId }) {
   );
 }
 
+function MontarDialog({ product, onClose, onDone, byId }) {
+  const [size, setSize] = useState("");
+  const [qty, setQty] = useState(1);
+  if (!product) return null;
+  const components = product.linked_ids.map((id) => byId[id]).filter(Boolean);
+  const selectedSize = product.sizes.find((item) => item.size === size);
+  const canAssemble = Boolean(
+    size
+    && qty > 0
+    && Number.isInteger(qty)
+    && selectedSize
+    && components.length === product.linked_ids.length
+    && components.every((component) => Number(component.sizes.find((item) => item.size === size)?.stock || 0) >= qty),
+  );
+  const run = async () => {
+    try {
+      await api.post(`/products/${product.id}/montar`, { size, qty });
+      toast.success("Montagem realizada");
+      onDone();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Erro na montagem");
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent data-testid="montar-dialog">
+        <DialogHeader><DialogTitle className="font-head">Montar {product.name}</DialogTitle></DialogHeader>
+        <div className="text-sm">Consome por unidade: <b>{components.map((component) => component.name).join(" + ")}</b></div>
+        <Field label="Tamanho">
+          <select className="lm-input" value={size} onChange={(event) => setSize(event.target.value)} data-testid="montar-size">
+            <option value="">—</option>
+            {product.sizes.map((item) => <option key={item.size} value={item.size}>{item.size} (estoque do produto {item.stock})</option>)}
+          </select>
+        </Field>
+        <div className="space-y-1 text-xs text-neutral-600">
+          {components.map((component) => (
+            <div key={component.id}>
+              {component.name}: {Number(component.sizes.find((item) => item.size === size)?.stock || 0)} disponível(is)
+            </div>
+          ))}
+        </div>
+        <Field label="Quantidade"><input type="number" min="1" step="1" className="lm-input" value={qty} onChange={(event) => setQty(Number(event.target.value))} data-testid="montar-qty" /></Field>
+        <button className="lm-btn lm-btn-olive justify-center" disabled={!canAssemble} onClick={run} data-testid="montar-confirm">
+          <PackagePlus size={15} />Montar
+        </button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [grids, setGrids] = useState([]);
   const [editing, setEditing] = useState(null);
   const [desmontar, setDesmontar] = useState(null);
+  const [montar, setMontar] = useState(null);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [sortBy, setSortBy] = useState("name");
+  const [sortDirection, setSortDirection] = useState("asc");
   const [params] = useSearchParams();
 
   const load = async () => {
@@ -123,12 +176,24 @@ export default function Products() {
     const matchesCategory = !categoryFilter || p.category_id === categoryFilter || p.subcategory_id === categoryFilter;
     const matchesSearch = !search || (p.name + p.sku + catName(p.category_id) + catName(p.subcategory_id) + (p.color || "")).toLowerCase().includes(search.toLowerCase());
     return matchesCategory && matchesSearch;
+  }).sort((first, second) => {
+    const totalStock = (product) => (product.sizes || []).reduce((sum, item) => sum + Number(item.stock || 0), 0);
+    const firstValue = sortBy === "category" ? catName(first.category_id)
+      : sortBy === "stock" ? totalStock(first)
+        : first[sortBy] ?? "";
+    const secondValue = sortBy === "category" ? catName(second.category_id)
+      : sortBy === "stock" ? totalStock(second)
+        : second[sortBy] ?? "";
+    const result = typeof firstValue === "number" && typeof secondValue === "number"
+      ? firstValue - secondValue
+      : String(firstValue).localeCompare(String(secondValue), "pt-BR", { numeric: true, sensitivity: "base" });
+    return sortDirection === "asc" ? result : -result;
   });
 
   return (
     <div data-testid="products-page">
       <div className="lm-page-head flex items-end justify-between gap-3 flex-wrap">
-        <div><h1>Produtos</h1><p>{products.length} produtos cadastrados · grade militar e vínculos de desmontagem</p></div>
+        <div><h1>Produtos</h1><p>{products.length} produtos cadastrados · grade militar e vínculos de montagem/desmontagem</p></div>
         <button className="lm-btn lm-btn-olive" onClick={() => setEditing({ ...BLANK })} data-testid="btn-new-product"><Plus size={16} />Novo produto</button>
       </div>
       <div className="flex flex-col sm:flex-row gap-2 mb-3 sm:max-w-3xl">
@@ -148,6 +213,27 @@ export default function Products() {
             ))}
           </select>
         </label>
+        <label className="sm:w-56">
+          <span className="sr-only">Classificar produtos por</span>
+          <select className="lm-input" value={sortBy} onChange={(event) => setSortBy(event.target.value)} data-testid="sort-products">
+            <option value="name">Ordenar por nome</option>
+            <option value="sku">Ordenar por SKU</option>
+            <option value="category">Ordenar por categoria</option>
+            <option value="stock">Ordenar por estoque</option>
+            <option value="cost">Ordenar por custo</option>
+            <option value="price">Ordenar por preço</option>
+            <option value="shelf">Ordenar por prateleira</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="lm-btn lm-btn-outline"
+          onClick={() => setSortDirection((direction) => direction === "asc" ? "desc" : "asc")}
+          aria-label={sortDirection === "asc" ? "Ordem crescente" : "Ordem decrescente"}
+          data-testid="sort-products-direction"
+        >
+          {sortDirection === "asc" ? "A → Z" : "Z → A"}
+        </button>
       </div>
 
       <div className="lm-table-wrap overflow-x-auto">
@@ -166,7 +252,7 @@ export default function Products() {
                   <td>
                     <div className="font-head font-semibold text-[15px]">{p.name}</div>
                     <div className="text-xs text-neutral-500">{[p.sku, categories.find((c) => c.id === p.subcategory_id)?.name, p.color, p.brand].filter(Boolean).join(" · ")}</div>
-                    {(p.linked_ids || []).length > 0 && <div className="text-[11px] text-[#4B5320] font-semibold mt-0.5">↳ Desmonta em: {p.linked_ids.map((id) => byId[id]?.name).filter(Boolean).join(" + ")}</div>}
+                    {(p.linked_ids || []).length > 0 && <div className="text-[11px] text-[#4B5320] font-semibold mt-0.5">↳ Monta com: {p.linked_ids.map((id) => byId[id]?.name).filter(Boolean).join(" + ")}</div>}
                     {parents.length > 0 && <div className="text-[11px] text-[#9c7209] font-semibold mt-0.5">↳ Vinculado a: {parents.map((x) => x.name).join(", ")}</div>}
                   </td>
                   <td>{catName(p.category_id)}</td>
@@ -176,7 +262,10 @@ export default function Products() {
                   <td className="whitespace-nowrap">{formatBRL(p.price)}</td>
                   <td>{p.shelf}</td>
                   <td className="whitespace-nowrap">
-                    {(p.linked_ids || []).length > 0 && <button className="p-1.5 hover:bg-[#E8E2D5] rounded" title="Desmontar" onClick={() => setDesmontar(p)} data-testid={`desmontar-${p.sku}`}><Scissors size={16} /></button>}
+                    {(p.linked_ids || []).length > 0 && <>
+                      <button className="p-1.5 hover:bg-[#E8E2D5] rounded" title="Desmontar" onClick={() => setDesmontar(p)} data-testid={`desmontar-${p.sku}`}><Scissors size={16} /></button>
+                      <button className="p-1.5 hover:bg-[#E8E2D5] rounded" title="Montar" onClick={() => setMontar(p)} data-testid={`montar-${p.sku}`}><PackagePlus size={16} /></button>
+                    </>}
                     <button className="p-1.5 hover:bg-[#E8E2D5] rounded" onClick={() => setEditing(JSON.parse(JSON.stringify(p)))} data-testid={`edit-${p.sku}`}><Pencil size={16} /></button>
                     <button className="p-1.5 hover:bg-red-100 rounded" onClick={() => remove(p.id)} data-testid={`delete-${p.sku}`}><Trash2 size={16} /></button>
                   </td>
@@ -189,6 +278,7 @@ export default function Products() {
       </div>
 
       {desmontar && <DesmontarDialog product={desmontar} byId={byId} onClose={() => setDesmontar(null)} onDone={() => { setDesmontar(null); load(); }} />}
+      {montar && <MontarDialog product={montar} byId={byId} onClose={() => setMontar(null)} onDone={() => { setMontar(null); load(); }} />}
 
       <Sheet open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <SheetContent className="w-full sm:max-w-3xl overflow-y-auto" style={{ background: "#FBF9F4" }}>
