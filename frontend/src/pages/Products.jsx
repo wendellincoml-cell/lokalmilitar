@@ -35,8 +35,8 @@ function LinkPicker({ editing, setEditing, products }) {
         Selecione os produtos em que este produto se desmonta (ex.: FARDA → CALÇA + GANDOLA da mesma cor). A desmontagem sempre usa o mesmo tamanho.
         Se um produto vinculado ficar sem estoque numa venda, 1 unidade deste produto é desmontada automaticamente.
       </p>
-      <div className="relative mb-2"><Search size={14} className="absolute left-2 top-2.5 text-neutral-400" />
-        <input className="lm-input pl-7" placeholder="Buscar produto para vincular..." value={q} onChange={(e) => setQ(e.target.value)} data-testid="link-search" /></div>
+      <div className="relative mb-2"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+        <input className="lm-input lm-search-input" placeholder="Buscar produto para vincular..." value={q} onChange={(e) => setQ(e.target.value)} data-testid="link-search" /></div>
       <div className="max-h-48 overflow-y-auto border rounded bg-white">
         {options.map((p) => (
           <label key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[#F4EFE3] cursor-pointer border-b last:border-0">
@@ -197,8 +197,8 @@ export default function Products() {
         <button className="lm-btn lm-btn-olive" onClick={() => setEditing({ ...BLANK })} data-testid="btn-new-product"><Plus size={16} />Novo produto</button>
       </div>
       <div className="flex flex-col sm:flex-row gap-2 mb-3 sm:max-w-3xl">
-        <div className="relative sm:flex-1"><Search size={15} className="absolute left-3 top-3 text-neutral-400" />
-          <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input pl-9" data-testid="search-products" /></div>
+        <div className="relative sm:flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+          <input placeholder="Buscar por nome, SKU, categoria, cor..." value={search} onChange={(e) => setSearch(e.target.value)} className="lm-input lm-search-input" data-testid="search-products" /></div>
         <label className="sm:w-64">
           <span className="sr-only">Filtrar produtos por categoria</span>
           <select className="lm-input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} data-testid="filter-products-category">

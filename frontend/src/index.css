@@ -154,6 +154,7 @@ h1, h2, h3 { color: var(--title-color); }
   padding: 8px 10px; font-size: 14px; font-family: var(--font-body);
   transition: border-color 120ms ease;
 }
+.lm-search-input { padding-left: 2.5rem; }
 .lokal-panel input:not([type="color"]), .lokal-panel select, .lokal-panel textarea {
   background-color: var(--input-bg);
   color: var(--input-text);
