@@ -18,6 +18,7 @@ import zipfile
 import zlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 from fastapi import (
     APIRouter,
@@ -272,7 +273,8 @@ class Product(BaseModel):
     cost: float = 0
     price: float = 0
     shelf: Optional[str] = None
-    photo: Optional[str] = None  # base64 or url
+    photo: Optional[str] = None
+    photo_url: Optional[str] = None
     sizes: List[ProductSize] = []
     linked_ids: List[str] = []  # componentes usados para montagem e desmontagem reversa
     created_at: str = Field(default_factory=now_iso)
@@ -850,14 +852,8 @@ async def consume_supply(expense_id: str, payload: dict, user: dict = Depends(ge
 
 # ---------- Products (custom to validate kit) ----------
 @api.get("/products")
-async def list_products(
-    include_photos: bool = False,
-    user: dict = Depends(get_current_user),
-):
-    projection = {"_id": 0}
-    if not include_photos:
-        projection["photo"] = 0
-    return await db.products.find({}, projection).to_list(5000)
+async def list_products(user: dict = Depends(get_current_user)):
+    return await db.products.find({}, {"_id": 0, "photo": 0}).to_list(5000)
 
 @api.get("/products/{pid}")
 async def get_product(pid: str, user: dict = Depends(get_current_user)):
@@ -877,8 +873,28 @@ async def get_product_photo(pid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Produto sem foto")
     return {"photo": product["photo"]}
 
+def validate_product_photo_url(photo_url: Optional[str]) -> Optional[str]:
+    if not photo_url:
+        return photo_url
+    if len(photo_url) > 2048:
+        raise HTTPException(400, "O link da foto não pode exceder 2048 caracteres")
+    try:
+        parsed_url = urlsplit(photo_url)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+            or parsed_url.username
+            or parsed_url.password
+        ):
+            raise ValueError("Invalid image URL")
+    except ValueError as error:
+        raise HTTPException(400, "Informe um link público de imagem começando com http:// ou https://") from error
+    return photo_url
+
 @api.post("/products")
 async def create_product(payload: dict, user: dict = Depends(get_current_user)):
+    if validate_product_photo_url(payload.get("photo_url")):
+        payload["photo"] = None
     obj = Product(**payload)
     doc = obj.model_dump()
     await db.products.insert_one(doc)
@@ -887,6 +903,9 @@ async def create_product(payload: dict, user: dict = Depends(get_current_user)):
 @api.put("/products/{pid}")
 async def update_product(pid: str, payload: dict, user: dict = Depends(get_current_user)):
     payload.pop("id", None)
+    if "photo_url" in payload:
+        if validate_product_photo_url(payload["photo_url"]):
+            payload["photo"] = None
     await db.products.update_one({"id": pid}, {"$set": payload})
     return await db.products.find_one({"id": pid}, {"_id": 0})
 

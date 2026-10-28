@@ -43,6 +43,10 @@ downloaded as a JPEG image. Vehicle trips update accumulated kilometers and
 estimate fuel consumption from vehicle data. Supplies keep a remaining quantity
 that can be reduced with “Consumir”.
 
+Product photos can be uploaded or referenced by a public HTTP/HTTPS image URL.
+Using a URL avoids storing and transferring the image through the API; the image
+host must allow the browser to load it.
+
 The page will reload when you make changes.\
 You may also see any lint errors in the console.
 

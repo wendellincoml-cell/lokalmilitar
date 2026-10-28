@@ -6,7 +6,7 @@ import { Plus, Pencil, Trash2, Scissors, PackagePlus, Image as ImageIcon, Link2,
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, sizes: [], linked_ids: [], photo: "" };
+const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, sizes: [], linked_ids: [], photo: "", photo_url: "" };
 
 const Field = ({ label, children, wide }) => (
   <label className={`block ${wide ? "md:col-span-2" : ""}`}><div className="font-head text-[11px] text-neutral-600 mb-1">{label}</div>{children}</label>
@@ -23,15 +23,16 @@ const SizeChips = ({ sizes }) => (
 
 function ProductThumbnail({ product }) {
   const imageRef = React.useRef(null);
-  const [photo, setPhoto] = useState("");
+  const [uploadedPhoto, setUploadedPhoto] = useState("");
 
   useEffect(() => {
+    if (product.photo_url) return undefined;
     if (!imageRef.current) return undefined;
     let active = true;
     const loadPhoto = async () => {
       try {
         const { data } = await api.get(`/products/${product.id}/photo`);
-        if (active) setPhoto(data.photo);
+        if (active) setUploadedPhoto(data.photo);
       } catch (error) {
         if (active && error.response?.status !== 404) {
           console.error(`Não foi possível carregar a foto do produto ${product.id}.`, error);
@@ -55,8 +56,9 @@ function ProductThumbnail({ product }) {
       active = false;
       observer.disconnect();
     };
-  }, [product.id]);
+  }, [product.id, product.photo_url]);
 
+  const photo = product.photo_url || uploadedPhoto;
   return (
     <div ref={imageRef} className="w-11 h-11 rounded bg-[#E8E2D5] flex items-center justify-center overflow-hidden">
       {photo ? <img src={photo} alt={product.name} className="w-full h-full object-cover" /> : <ImageIcon size={18} className="text-neutral-500" />}
@@ -226,7 +228,7 @@ export default function Products() {
     }
   };
   const remove = async (id) => { if (!window.confirm("Excluir produto?")) return; await api.delete(`/products/${id}`); toast.success("Removido"); load(); };
-  const onPhoto = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => setEditing((e) => ({ ...e, photo: r.result })); r.readAsDataURL(f); };
+  const onPhoto = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => setEditing((e) => ({ ...e, photo: r.result, photo_url: "" })); r.readAsDataURL(f); };
   const setSize = (i, patch) => setEditing((e) => { const sz = [...e.sizes]; sz[i] = { ...sz[i], ...patch }; return { ...e, sizes: sz }; });
   const addSize = (size = "") => setEditing((e) => (e.sizes.some((s) => s.size === size && size) ? e : { ...e, sizes: [...e.sizes, { size, stock: 0, stock_min: 0 }] }));
 
@@ -343,7 +345,7 @@ export default function Products() {
             <div className="space-y-4 mt-4">
               <div className="flex items-center gap-4">
                 <div className="w-20 h-20 rounded bg-[#E8E2D5] flex items-center justify-center overflow-hidden">
-                  {editing.photo ? <img src={editing.photo} alt="" className="w-full h-full object-cover" /> : <ImageIcon className="text-neutral-500" />}
+                  {editing.photo_url || editing.photo ? <img src={editing.photo_url || editing.photo} alt="" className="w-full h-full object-cover" /> : <ImageIcon className="text-neutral-500" />}
                 </div>
                 <div className="flex flex-col items-start gap-2">
                   <label className="lm-btn lm-btn-outline cursor-pointer">
@@ -359,9 +361,23 @@ export default function Products() {
                       data-testid="p-photo"
                     />
                   </label>
-                  {editing.photo && <button type="button" className="text-xs text-red-700 underline" onClick={() => setEditing({ ...editing, photo: "" })} data-testid="p-remove-photo">Remover foto</button>}
+                  {(editing.photo || editing.photo_url) && <button type="button" className="text-xs text-red-700 underline" onClick={() => setEditing({ ...editing, photo: "", photo_url: "" })} data-testid="p-remove-photo">Remover foto</button>}
                 </div>
               </div>
+              <Field label="Ou cole o link público da imagem">
+                <input
+                  type="url"
+                  className="lm-input"
+                  placeholder="https://exemplo.com/foto-do-produto.jpg"
+                  value={editing.photo_url || ""}
+                  onChange={(event) => setEditing({
+                    ...editing,
+                    photo_url: event.target.value,
+                    ...(event.target.value ? { photo: "" } : {}),
+                  })}
+                  data-testid="p-photo-url"
+                />
+              </Field>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="Nome *"><input className="lm-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} data-testid="p-name" /></Field>
                 <Field label="SKU *"><input className="lm-input" value={editing.sku} onChange={(e) => setEditing({ ...editing, sku: e.target.value })} data-testid="p-sku" /></Field>
