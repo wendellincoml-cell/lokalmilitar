@@ -452,8 +452,8 @@ class Vendor(BaseModel):
     created_at: str = Field(default_factory=now_iso)
 
 # ---------- Simple generic CRUD factory ----------
-def make_crud(coll_name: str, Model):
-    router = APIRouter(prefix=f"/{coll_name}")
+def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
+    router = APIRouter(prefix=f"/{route_name or coll_name}")
 
     @router.get("")
     async def list_all(user: dict = Depends(get_current_user)):
@@ -827,6 +827,7 @@ api.include_router(make_crud("size_grids", SizeGrid))
 api.include_router(make_crud("suppliers", Supplier))
 api.include_router(make_crud("customers", Customer))
 api.include_router(make_crud("vehicles", Vehicle))
+api.include_router(make_crud("vehicles", Vehicle, route_name="auto"))
 api.include_router(make_crud("expenses", Expense))
 api.include_router(make_crud("vendors", Vendor))
 

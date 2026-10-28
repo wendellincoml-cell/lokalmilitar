@@ -514,6 +514,35 @@ def test_day_close_is_saved_and_idempotent(admin):
     assert saved_report.json()["id"] == report["id"]
     assert any(item["id"] == order["id"] for item in saved_report.json()["orders"])
 
+
+def test_auto_endpoint_aliases_vehicle_crud(admin):
+    name = f"TEST_Auto_{uuid.uuid4().hex[:6]}"
+    created = admin.post(
+        f"{BASE_URL}/api/auto",
+        json={"name": name, "current_km": 120},
+    )
+    assert created.status_code == 200, created.text
+    vehicle = created.json()
+    CREATED["vehicles"].append(vehicle["id"])
+    assert any(item["id"] == vehicle["id"] for item in admin.get(f"{BASE_URL}/api/vehicles").json())
+
+    fetched = admin.get(f"{BASE_URL}/api/auto/{vehicle['id']}")
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["name"] == name
+
+    updated = admin.put(
+        f"{BASE_URL}/api/auto/{vehicle['id']}",
+        json={"current_km": 135},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["current_km"] == 135
+    assert admin.get(f"{BASE_URL}/api/vehicles/{vehicle['id']}").json()["current_km"] == 135
+
+    deleted = admin.delete(f"{BASE_URL}/api/auto/{vehicle['id']}")
+    assert deleted.status_code == 200, deleted.text
+    assert admin.get(f"{BASE_URL}/api/vehicles/{vehicle['id']}").status_code == 404
+
+
 def test_reset_orders_preserves_settings_and_customers(admin):
     customer_response = admin.post(
         f"{BASE_URL}/api/customers",
