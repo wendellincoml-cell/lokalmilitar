@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Trash2, Download, Upload } from "lucide-react";
+import useSubmitLock from "@/hooks/useSubmitLock";
 import {
   DASHBOARD_KPIS,
   DEFAULT_DASHBOARD_PREFERENCES,
@@ -58,7 +59,7 @@ const dashboardItemLabel = (id, categories) => {
   return DASHBOARD_KPIS.find((item) => item.id === id)?.label || id;
 };
 
-function ThemeSection({ theme, applyTheme, onSave, onReset }) {
+function ThemeSection({ theme, applyTheme, onSave, onReset, saving, resetting }) {
   return (
     <section className="lokal-panel p-4" data-testid="theme-section">
       <h2 className="lokal-stencil text-sm mb-1">Aparência — fontes e cores</h2>
@@ -123,14 +124,18 @@ function ThemeSection({ theme, applyTheme, onSave, onReset }) {
         <button className="lm-btn lm-btn-olive mt-2">Botão principal</button>
       </div>
       <div className="flex gap-2 mt-3">
-        <button className="lm-btn lm-btn-olive" onClick={() => onSave(theme)} data-testid="theme-save">Salvar aparência</button>
-        <button className="lm-btn lm-btn-outline" onClick={onReset} data-testid="theme-reset">Restaurar padrão</button>
+        <button className="lm-btn lm-btn-olive" onClick={() => onSave(theme)} disabled={saving} data-testid="theme-save">
+          {saving ? "Salvando..." : "Salvar aparência"}
+        </button>
+        <button className="lm-btn lm-btn-outline" onClick={onReset} disabled={resetting} data-testid="theme-reset">
+          {resetting ? "Restaurando..." : "Restaurar padrão"}
+        </button>
       </div>
     </section>
   );
 }
 
-function DashboardSection({ categories, initialPreferences, onSave, onChange }) {
+function DashboardSection({ categories, initialPreferences, onSave, onChange, saving }) {
   const [preferences, setPreferences] = useState(initialPreferences);
   const itemIds = [
     ...categories.map((category) => dashboardItemId(category.name)),
@@ -272,7 +277,9 @@ function DashboardSection({ categories, initialPreferences, onSave, onChange }) 
       </div>
 
       <div className="flex gap-2">
-        <button className="lm-btn lm-btn-olive" onClick={() => onSave(preferences)} data-testid="dashboard-save">Salvar dashboard</button>
+        <button className="lm-btn lm-btn-olive" onClick={() => onSave(preferences)} disabled={saving} data-testid="dashboard-save">
+          {saving ? "Salvando..." : "Salvar dashboard"}
+        </button>
         <button className="lm-btn lm-btn-outline" onClick={() => update({
           ...DEFAULT_DASHBOARD_PREFERENCES,
           order: itemIds,
@@ -289,6 +296,7 @@ const STORE_FIELDS = [
 
 export default function Settings() {
   const { user, bg, applyBg, panel, applyPanel, theme, applyTheme, dashboardPreferences, applyDashboardPreferences } = useAuth();
+  const { run: withSubmitLock, isPending } = useSubmitLock();
   const [s, setS] = useState(null);
   const [users, setUsers] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -341,7 +349,7 @@ export default function Settings() {
     }
   }, [applyDashboardPreferences, isAdmin]);
 
-  const resetSystemData = async () => {
+  const resetSystemData = () => withSubmitLock("reset-data", async () => {
     const groups = resetMode === "all"
       ? resetOptions.map((option) => option.id)
       : selectedResetGroups;
@@ -363,7 +371,7 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível apagar os dados selecionados");
     }
-  };
+  });
 
   const downloadBackup = async (backup) => {
     try {
@@ -379,7 +387,7 @@ export default function Settings() {
     }
   };
 
-  const restoreBackup = async () => {
+  const restoreBackup = () => withSubmitLock("restore-backup", async () => {
     if (!backupFile) {
       toast.error("Selecione um arquivo ZIP de backup");
       return;
@@ -404,9 +412,9 @@ export default function Settings() {
     } finally {
       setRestoringBackup(false);
     }
-  };
+  });
 
-  const saveCurrentOrderNumber = async () => {
+  const saveCurrentOrderNumber = () => withSubmitLock("order-number", async () => {
     const currentNumber = Number(currentOrderNumber);
     if (!Number.isSafeInteger(currentNumber) || currentNumber < 0) {
       toast.error("Informe um número inteiro válido");
@@ -419,9 +427,9 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível atualizar a numeração dos pedidos");
     }
-  };
+  });
 
-  const createInvite = async () => {
+  const createInvite = () => withSubmitLock("create-invite", async () => {
     try {
       const { data } = await api.post("/auth/invitations", { expires_in_days: Number(inviteDays) });
       const link = `${window.location.origin}/login?invite=${encodeURIComponent(data.code)}`;
@@ -431,7 +439,7 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível criar o convite");
     }
-  };
+  });
   const copyInviteLink = async () => {
     try {
       await navigator.clipboard.writeText(createdInviteLink);
@@ -468,15 +476,15 @@ export default function Settings() {
       toast.error("Não foi possível salvar a cor das janelas");
     }
   };
-  const saveTheme = async (t) => {
+  const saveTheme = (t) => withSubmitLock("save-theme", async () => {
     try {
       await api.put("/settings", { theme: t });
       toast.success("Aparência salva");
     } catch {
       toast.error("Não foi possível salvar a aparência");
     }
-  };
-  const saveDashboard = async (preferences) => {
+  });
+  const saveDashboard = (preferences) => withSubmitLock("save-dashboard", async () => {
     try {
       await api.put("/settings", { dashboard_preferences: preferences });
       applyDashboardPreferences(preferences);
@@ -484,8 +492,8 @@ export default function Settings() {
     } catch {
       toast.error("Não foi possível salvar o dashboard");
     }
-  };
-  const resetAppearance = async () => {
+  });
+  const resetAppearance = () => withSubmitLock("reset-appearance", async () => {
     applyTheme(DEFAULT_THEME);
     applyBg("#F5F0E6");
     applyPanel("#FBF9F4");
@@ -499,9 +507,12 @@ export default function Settings() {
     } catch {
       toast.error("Não foi possível salvar a aparência padrão");
     }
-  };
-  const saveStore = async () => { await api.put("/settings", s); toast.success("Dados salvos"); };
-  const saveFuelPrices = async () => {
+  });
+  const saveStore = () => withSubmitLock("save-store", async () => {
+    await api.put("/settings", s);
+    toast.success("Dados salvos");
+  });
+  const saveFuelPrices = () => withSubmitLock("save-fuel-prices", async () => {
     const prices = Object.fromEntries(FUEL_TYPES.map((fuel) => [fuel, Number(s.fuel_prices?.[fuel] || 0)]));
     if (Object.values(prices).some((price) => !Number.isFinite(price) || price < 0)) {
       toast.error("Informe valores válidos e não negativos para os combustíveis");
@@ -514,8 +525,8 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível salvar os preços dos combustíveis");
     }
-  };
-  const updateUser = async (id) => {
+  });
+  const updateUser = (id) => withSubmitLock(`update-user:${id}`, async () => {
     const update = userEdits[id];
     try {
       await api.put(`/auth/users/${id}`, {
@@ -528,8 +539,8 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível atualizar o usuário");
     }
-  };
-  const changeOwnPassword = async () => {
+  });
+  const changeOwnPassword = () => withSubmitLock("change-password", async () => {
     try {
       await api.put("/auth/password", passwordChange);
       setPasswordChange({ current_password: "", new_password: "" });
@@ -537,11 +548,11 @@ export default function Settings() {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível alterar a senha");
     }
-  };
-  const addUser = async () => {
+  });
+  const addUser = () => withSubmitLock("add-user", async () => {
     try { await api.post("/auth/users", nu); toast.success("Usuário criado"); setNu({ name: "", email: "", password: "", role: "visualizador" }); loadUsers(); }
     catch (e) { toast.error(typeof e.response?.data?.detail === "string" ? e.response.data.detail : "Erro ao criar usuário"); }
-  };
+  });
   const delUser = async (id) => { if (!window.confirm("Excluir usuário?")) return; await api.delete(`/auth/users/${id}`); loadUsers(); };
 
   if (!s) return <div className="font-mono">Carregando...</div>;
@@ -573,13 +584,21 @@ export default function Settings() {
         <Swatches colors={PANEL_COLORS} current={panel} onPick={pickPanel} prefix="panel-color" />
       </section>
 
-      <ThemeSection theme={theme} applyTheme={applyTheme} onSave={saveTheme} onReset={resetAppearance} />
+      <ThemeSection
+        theme={theme}
+        applyTheme={applyTheme}
+        onSave={saveTheme}
+        onReset={resetAppearance}
+        saving={isPending("save-theme")}
+        resetting={isPending("reset-appearance")}
+      />
 
       <DashboardSection
         categories={categories}
         initialPreferences={dashboardPreferences}
         onChange={applyDashboardPreferences}
         onSave={saveDashboard}
+        saving={isPending("save-dashboard")}
       />
 
       {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="fuel-price-settings">
@@ -606,7 +625,9 @@ export default function Settings() {
             </label>
           ))}
         </div>
-        <button className="lokal-btn-primary" onClick={saveFuelPrices} data-testid="save-fuel-prices">SALVAR VALORES</button>
+        <button className="lokal-btn-primary" onClick={saveFuelPrices} disabled={isPending("save-fuel-prices")} data-testid="save-fuel-prices">
+          {isPending("save-fuel-prices") ? "SALVANDO..." : "SALVAR VALORES"}
+        </button>
       </section>}
 
       {isAdmin && <section className="lokal-panel p-4 space-y-3" data-testid="order-number-settings">
@@ -631,7 +652,7 @@ export default function Settings() {
           <button
             className="lokal-btn-primary"
             onClick={saveCurrentOrderNumber}
-            disabled={currentOrderNumber === ""}
+            disabled={currentOrderNumber === "" || isPending("order-number")}
             data-testid="save-order-number"
           >
             SALVAR NUMERAÇÃO
@@ -679,7 +700,7 @@ export default function Settings() {
         <button
           className="px-4 py-2 rounded-sm bg-red-800 text-white disabled:opacity-50"
           onClick={resetSystemData}
-          disabled={!resetOptions.length || (resetMode === "partial" && !selectedResetGroups.length)}
+          disabled={!resetOptions.length || (resetMode === "partial" && !selectedResetGroups.length) || isPending("reset-data")}
           data-testid="execute-data-reset"
         >
           APAGAR DADOS SELECIONADOS
@@ -719,7 +740,7 @@ export default function Settings() {
             <button
               className="lm-btn lm-btn-dark"
               onClick={restoreBackup}
-              disabled={!backupFile || restoringBackup}
+              disabled={!backupFile || restoringBackup || isPending("restore-backup")}
               data-testid="restore-backup-submit"
             >
               <Upload size={14} />{restoringBackup ? "Restaurando..." : "Restaurar backup"}
@@ -737,7 +758,9 @@ export default function Settings() {
             </label>
           ))}
         </div>
-        <button className="lokal-btn-primary mt-3" onClick={saveStore} data-testid="save-settings">SALVAR</button>
+        <button className="lokal-btn-primary mt-3" onClick={saveStore} disabled={isPending("save-store")} data-testid="save-settings">
+          {isPending("save-store") ? "SALVANDO..." : "SALVAR"}
+        </button>
       </section>
 
       <section className="lokal-panel p-4">
@@ -757,7 +780,9 @@ export default function Settings() {
               {isAdmin && <td><input className="border px-2 py-1 text-sm min-w-40" type="password" placeholder="Opcional · mínimo 8"
                 value={userEdits[u.id]?.password || ""} onChange={(e) => setUserEdits({ ...userEdits, [u.id]: { ...userEdits[u.id], password: e.target.value } })} aria-label={`Nova senha de ${u.name}`} /></td>}
               <td className="whitespace-nowrap">{isAdmin && <>
-                <button className="text-green-800 p-1" onClick={() => updateUser(u.id)} title="Salvar login e privilégios" data-testid={`save-user-${u.id}`}>Salvar</button>
+                <button className="text-green-800 p-1" onClick={() => updateUser(u.id)} disabled={isPending(`update-user:${u.id}`)} title="Salvar login e privilégios" data-testid={`save-user-${u.id}`}>
+                  {isPending(`update-user:${u.id}`) ? "Salvando..." : "Salvar"}
+                </button>
                 {u.id !== user.id && <button className="text-red-700 p-1" onClick={() => delUser(u.id)} data-testid={`del-user-${u.email}`}><Trash2 size={13} /></button>}
               </>}</td></tr>
           ))}</tbody>
@@ -771,7 +796,9 @@ export default function Settings() {
             <select className="border px-2 py-1.5 text-sm" value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })} data-testid="nu-role">
               <option value="visualizador">Somente visualização</option><option value="vendedor">Vendedor</option><option value="admin">Admin</option>
             </select>
-            <button className="lokal-btn-primary" onClick={addUser} data-testid="nu-save">ADICIONAR</button>
+            <button className="lokal-btn-primary" onClick={addUser} disabled={isPending("add-user")} data-testid="nu-save">
+              {isPending("add-user") ? "ADICIONANDO..." : "ADICIONAR"}
+            </button>
           </div>
         ) : <div className="text-xs font-mono text-neutral-500">Apenas administradores podem gerenciar usuários.</div>}
       </section>
@@ -786,7 +813,9 @@ export default function Settings() {
           <select className="border px-2 py-1.5 text-sm" value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value))} data-testid="invite-expiration">
             {[1, 3, 7, 14, 30].map((days) => <option key={days} value={days}>{days} {days === 1 ? "dia" : "dias"}</option>)}
           </select>
-          <button className="lokal-btn-primary" onClick={createInvite} data-testid="create-invite">GERAR CONVITE</button>
+          <button className="lokal-btn-primary" onClick={createInvite} disabled={isPending("create-invite")} data-testid="create-invite">
+            {isPending("create-invite") ? "GERANDO..." : "GERAR CONVITE"}
+          </button>
         </div>
         {createdInviteLink && <div className="flex flex-col sm:flex-row gap-2">
           <input className="border px-2 py-1.5 text-sm flex-1 min-w-0" value={createdInviteLink} readOnly onFocus={(e) => e.target.select()} aria-label="Link do convite" data-testid="invite-link" />
@@ -816,7 +845,9 @@ export default function Settings() {
             onChange={(e) => setPasswordChange({ ...passwordChange, current_password: e.target.value })} data-testid="current-password" />
           <input className="border px-2 py-1.5 text-sm" type="password" placeholder="Nova senha · mínimo 8 caracteres" minLength={8} value={passwordChange.new_password}
             onChange={(e) => setPasswordChange({ ...passwordChange, new_password: e.target.value })} data-testid="new-password" />
-          <button className="lokal-btn-primary" onClick={changeOwnPassword} disabled={!passwordChange.current_password || passwordChange.new_password.length < 8} data-testid="change-password">ALTERAR SENHA</button>
+          <button className="lokal-btn-primary" onClick={changeOwnPassword} disabled={!passwordChange.current_password || passwordChange.new_password.length < 8 || isPending("change-password")} data-testid="change-password">
+            {isPending("change-password") ? "ALTERANDO..." : "ALTERAR SENHA"}
+          </button>
         </div>
       </section>
     </div>

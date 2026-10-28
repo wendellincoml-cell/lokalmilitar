@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { CrudPage } from "@/components/CrudPage";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { toast } from "sonner";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const sumBox = (label, value) => (
   <div className="lokal-panel p-3 mt-3 text-right font-mono text-sm" data-testid="total-box">{label}: <b>{value}</b></div>
@@ -124,6 +125,7 @@ export function Vehicles() {
 
 export function Insumos() {
   const [suppliers, setSuppliers] = useState([]);
+  const { run: withSubmitLock, isPending } = useSubmitLock();
   useEffect(() => { api.get("/suppliers").then((r) => setSuppliers(r.data)); }, []);
   const supName = (id) => suppliers.find((s) => s.id === id)?.name || "-";
   return (
@@ -145,8 +147,8 @@ export function Insumos() {
         { label: "RESTANTE", render: (r) => `${Number(r.remaining_quantity || 0)} ${r.unit || ""}` },
       ]}
       rowActions={(row, reload) => (
-        <button className="text-xs text-green-800 px-2 py-1" disabled={Number(row.remaining_quantity || 0) <= 0}
-          onClick={async () => {
+        <button className="text-xs text-green-800 px-2 py-1" disabled={Number(row.remaining_quantity || 0) <= 0 || isPending(`consume:${row.id}`)}
+          onClick={() => withSubmitLock(`consume:${row.id}`, async () => {
             const raw = window.prompt(`Quantidade usada (restam ${row.remaining_quantity} ${row.unit || ""}):`);
             if (raw === null) return;
             const quantity = Number(raw);
@@ -158,7 +160,10 @@ export function Insumos() {
             } catch (error) {
               toast.error(error.response?.data?.detail || "Não foi possível registrar o consumo");
             }
-          }}>Consumir</button>
+          })}
+        >
+          {isPending(`consume:${row.id}`) ? "Registrando..." : "Consumir"}
+        </button>
       )}
       footer={(rows) => sumBox("Total em insumos", total(rows, (r) => Number(r.amount || 0)))} />
   );

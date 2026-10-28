@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { FileSpreadsheet, Printer, CircleCheck, UserPlus, Trash2 } from "lucide-react";
 import { Pencil } from "lucide-react";
 import CustomerSignaturePad from "@/components/CustomerSignaturePad";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const PERIODS = [["hoje", "Hoje"], ["semana", "Semana"], ["mes", "Mês"], ["todos", "Todos"]];
 const PERIOD_LABEL = { hoje: "Hoje", semana: "Semana", mes: "Mês", todos: "Todos" };
@@ -20,7 +21,8 @@ function VendorsPanel({ vendors, reload }) {
   const emptyVendor = { name: "", phone: "", cpf: "", signature: "" };
   const [form, setForm] = useState(emptyVendor);
   const [editingId, setEditingId] = useState("");
-  const add = async () => {
+  const { run: withSubmitLock, isPending } = useSubmitLock();
+  const add = () => withSubmitLock("vendor", async () => {
     if (!form.name.trim() || !form.phone.trim() || !form.cpf.trim() || !form.signature) {
       return toast.error("Informe nome, telefone, CPF e registre a assinatura");
     }
@@ -35,7 +37,7 @@ function VendorsPanel({ vendors, reload }) {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível salvar o vendedor");
     }
-  };
+  });
   const edit = (vendor) => {
     setEditingId(vendor.id);
     setForm({ name: vendor.name || "", phone: vendor.phone || "", cpf: vendor.cpf || "", signature: vendor.signature || "" });
@@ -62,7 +64,9 @@ function VendorsPanel({ vendors, reload }) {
         </div>
         <CustomerSignaturePad initialValue={form.signature} onChange={(signature) => setForm((current) => ({ ...current, signature }))} />
         <div className="flex gap-2">
-          <button className="lm-btn lm-btn-olive" onClick={add} data-testid="vendor-add"><UserPlus size={16} />{editingId ? "Salvar vendedor" : "Cadastrar vendedor"}</button>
+          <button className="lm-btn lm-btn-olive" onClick={add} disabled={isPending("vendor")} data-testid="vendor-add">
+            <UserPlus size={16} />{isPending("vendor") ? "Salvando..." : editingId ? "Salvar vendedor" : "Cadastrar vendedor"}
+          </button>
           {editingId && <button className="lm-btn lm-btn-outline" onClick={cancelEdit}>Cancelar</button>}
         </div>
       </div>
@@ -88,6 +92,7 @@ export default function Commissions() {
   const [vendor, setVendor] = useState("ALL");
   const [period, setPeriod] = useState("mes");
   const [paidF, setPaidF] = useState("all");
+  const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
     const [c, o, v, movements] = await Promise.all([
@@ -116,10 +121,10 @@ export default function Commissions() {
   const total = shown.reduce((s, r) => s + r.amount, 0);
   const items = shown.reduce((s, r) => s + r.items_count, 0);
 
-  const pay = async () => {
+  const pay = () => withSubmitLock("mark-paid", async () => {
     await api.post("/commissions/mark_paid", { ids: pending.map((r) => r.id) });
     toast.success("Comissões marcadas como pagas"); load();
-  };
+  });
   const tableRows = shown.map((r) => [r.order_number, formatDateShort(r.created_at), r.vendor_name || "", orderById[r.order_id]?.customer_name || "", orderById[r.order_id]?.status || "", r.items_count, r.amount, r.paid ? "PAGA" : "PENDENTE"]);
   const movementRows = reportStockMovements.map((movement) => [
     movement.order.number,
@@ -170,7 +175,9 @@ export default function Commissions() {
         <div className="flex gap-2 flex-wrap">
           <button className="lm-btn lm-btn-outline" onClick={exportExcel} data-testid="com-excel"><FileSpreadsheet size={15} />Excel</button>
           <button className="lm-btn lm-btn-dark" onClick={printReport} data-testid="com-print"><Printer size={15} />Imprimir relatório de comissão</button>
-          <button className="lm-btn lm-btn-gold" disabled={!pending.length} onClick={pay} data-testid="com-pay"><CircleCheck size={15} />Marcar como pago</button>
+          <button className="lm-btn lm-btn-gold" disabled={!pending.length || isPending("mark-paid")} onClick={pay} data-testid="com-pay">
+            <CircleCheck size={15} />{isPending("mark-paid") ? "Salvando..." : "Marcar como pago"}
+          </button>
         </div>
       </div>
 

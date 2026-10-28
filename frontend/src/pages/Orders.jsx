@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
 import CustomerSignaturePad from "@/components/CustomerSignaturePad";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const BLANK_ORDER = {
   type: "VENDA", status: "Orçamento", customer_id: "", customer_name: "",
@@ -42,6 +43,7 @@ export default function Orders({ mode }) {
   const [autoPrintPending, setAutoPrintPending] = useState(false);
   const [savingJpeg, setSavingJpeg] = useState(false);
   const jpegTargetRef = useRef(null);
+  const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
     try {
@@ -101,7 +103,7 @@ export default function Orders({ mode }) {
     return { shortage, parentProducts, dismantlableQuantity };
   };
 
-  const save = async () => {
+  const save = () => withSubmitLock("save-order", async () => {
     try {
       if (!editing.customer_name && !editing.customer_id) return toast.error("Informe o cliente");
       if (editing.items.length === 0 && editing.type==="VENDA") return toast.error("Adicione ao menos 1 item");
@@ -117,7 +119,7 @@ export default function Orders({ mode }) {
       else await api.post("/orders", editing);
       toast.success("Pedido salvo"); setOpen(false); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro"); }
-  };
+  });
 
   const changeOrderStatus = async (order, status) => {
     if (status === order.status) return;
@@ -177,7 +179,7 @@ export default function Orders({ mode }) {
     return () => window.clearTimeout(timeout);
   }, [autoPrintPending, printing]);
 
-  const completeOrder = async () => {
+  const completeOrder = () => withSubmitLock("fulfill-order", async () => {
     if (!fulfillment) return;
     if (!fulfillment.signature) {
       toast.error("Solicite a assinatura do cliente antes de concluir o pedido");
@@ -200,7 +202,7 @@ export default function Orders({ mode }) {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível concluir o pedido");
     }
-  };
+  });
   const beginSignature = async () => {
     setFulfillment((current) => current ? { ...current, step: "signature" } : current);
     try {
@@ -537,7 +539,9 @@ export default function Orders({ mode }) {
                       <button className="lm-btn lm-btn-dark" onClick={()=>doPrint(editing,"a4")} data-testid="sheet-print"><Printer size={13}/>Imprimir / PDF</button>
                     </>
                   )}
-                  <button className="lokal-btn-primary" onClick={save} data-testid="save-order">SALVAR</button>
+                  <button className="lokal-btn-primary" onClick={save} disabled={isPending("save-order")} data-testid="save-order">
+                    {isPending("save-order") ? "SALVANDO..." : "SALVAR"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -623,7 +627,9 @@ export default function Orders({ mode }) {
                   <CustomerSignaturePad initialValue={fulfillment.signature} onChange={(signature) => setFulfillment((current) => current ? { ...current, signature } : current)} />
                   <div className="flex flex-wrap justify-between gap-2">
                     <button className="lm-btn lm-btn-outline" onClick={() => setFulfillment((current) => current ? { ...current, step: "review" } : current)}>Voltar à conferência</button>
-                    <button className="lm-btn lm-btn-olive" onClick={completeOrder} data-testid="confirm-order-fulfillment"><Check size={14}/>Confirmar e lançar estoque</button>
+                    <button className="lm-btn lm-btn-olive" onClick={completeOrder} disabled={isPending("fulfill-order")} data-testid="confirm-order-fulfillment">
+                      <Check size={14}/>{isPending("fulfill-order") ? "Registrando..." : "Confirmar e lançar estoque"}
+                    </button>
                   </div>
                 </>
               )}

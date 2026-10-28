@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Plus, Pencil, Trash2, Scissors, PackagePlus, Image as ImageIcon, Link2, Search } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const BLANK = { name: "", sku: "", category_id: "", subcategory_id: "", color: "", brand: "", shelf: "", cost: 0, price: 0, sizes: [], linked_ids: [], photo: "", photo_url: "" };
 
@@ -99,15 +100,16 @@ function LinkPicker({ editing, setEditing, products }) {
 function DesmontarDialog({ product, onClose, onDone, byId }) {
   const [size, setSize] = useState("");
   const [qty, setQty] = useState(1);
+  const { run: withSubmitLock, isPending } = useSubmitLock();
   if (!product) return null;
-  const run = async () => {
+  const run = () => withSubmitLock("submit", async () => {
     try {
       await api.post(`/products/${product.id}/desmontar`, { size, qty });
       toast.success("Desmontagem realizada"); onDone();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro na desmontagem"); }
-  };
+  });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !isPending("submit") && onClose()}>
       <DialogContent data-testid="desmontar-dialog">
         <DialogHeader><DialogTitle className="font-head">Desmontar {product.name}</DialogTitle></DialogHeader>
         <div className="text-sm">Gera +1 de: <b>{product.linked_ids.map((id) => byId[id]?.name).filter(Boolean).join(" + ")}</b> por unidade.</div>
@@ -118,7 +120,9 @@ function DesmontarDialog({ product, onClose, onDone, byId }) {
           </select>
         </Field>
         <Field label="Quantidade"><input type="number" min="1" className="lm-input" value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="desmontar-qty" /></Field>
-        <button className="lm-btn lm-btn-olive justify-center" disabled={!size} onClick={run} data-testid="desmontar-confirm"><Scissors size={15} />Desmontar</button>
+        <button className="lm-btn lm-btn-olive justify-center" disabled={!size || isPending("submit")} onClick={run} data-testid="desmontar-confirm">
+          <Scissors size={15} />{isPending("submit") ? "Desmontando..." : "Desmontar"}
+        </button>
       </DialogContent>
     </Dialog>
   );
@@ -127,6 +131,7 @@ function DesmontarDialog({ product, onClose, onDone, byId }) {
 function MontarDialog({ product, onClose, onDone, byId }) {
   const [size, setSize] = useState("");
   const [qty, setQty] = useState(1);
+  const { run: withSubmitLock, isPending } = useSubmitLock();
   if (!product) return null;
   const components = product.linked_ids.map((id) => byId[id]).filter(Boolean);
   const selectedSize = product.sizes.find((item) => item.size === size);
@@ -138,7 +143,7 @@ function MontarDialog({ product, onClose, onDone, byId }) {
     && components.length === product.linked_ids.length
     && components.every((component) => Number(component.sizes.find((item) => item.size === size)?.stock || 0) >= qty),
   );
-  const run = async () => {
+  const run = () => withSubmitLock("submit", async () => {
     try {
       await api.post(`/products/${product.id}/montar`, { size, qty });
       toast.success("Montagem realizada");
@@ -146,9 +151,9 @@ function MontarDialog({ product, onClose, onDone, byId }) {
     } catch (error) {
       toast.error(error.response?.data?.detail || "Erro na montagem");
     }
-  };
+  });
   return (
-    <Dialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog open onOpenChange={(isOpen) => !isOpen && !isPending("submit") && onClose()}>
       <DialogContent data-testid="montar-dialog">
         <DialogHeader><DialogTitle className="font-head">Montar {product.name}</DialogTitle></DialogHeader>
         <div className="text-sm">Consome por unidade: <b>{components.map((component) => component.name).join(" + ")}</b></div>
@@ -166,8 +171,8 @@ function MontarDialog({ product, onClose, onDone, byId }) {
           ))}
         </div>
         <Field label="Quantidade"><input type="number" min="1" step="1" className="lm-input" value={qty} onChange={(event) => setQty(Number(event.target.value))} data-testid="montar-qty" /></Field>
-        <button className="lm-btn lm-btn-olive justify-center" disabled={!canAssemble} onClick={run} data-testid="montar-confirm">
-          <PackagePlus size={15} />Montar
+        <button className="lm-btn lm-btn-olive justify-center" disabled={!canAssemble || isPending("submit")} onClick={run} data-testid="montar-confirm">
+          <PackagePlus size={15} />{isPending("submit") ? "Montando..." : "Montar"}
         </button>
       </DialogContent>
     </Dialog>
@@ -186,6 +191,7 @@ export default function Products() {
   const [sortBy, setSortBy] = useState("name");
   const [sortDirection, setSortDirection] = useState("asc");
   const [params] = useSearchParams();
+  const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
     const [p, c, g] = await Promise.all([api.get("/products"), api.get("/categories"), api.get("/size_grids")]);
@@ -211,14 +217,14 @@ export default function Products() {
   const subCats = editing ? categories.filter((c) => c.parent_id && c.parent_id === editing.category_id) : [];
   const gridObj = editing && grids.find((g) => g.name === categories.find((c) => c.id === editing.category_id)?.size_grid);
 
-  const save = async () => {
+  const save = () => withSubmitLock("save", async () => {
     if (!editing.name || !editing.sku) return toast.error("Nome e SKU obrigatórios");
     try {
       if (editing.id) await api.put(`/products/${editing.id}`, editing);
       else await api.post("/products", editing);
       toast.success("Produto salvo"); setEditing(null); load();
     } catch { toast.error("Erro ao salvar"); }
-  };
+  });
   const openEdit = async (productId) => {
     try {
       const { data } = await api.get(`/products/${productId}`);
@@ -420,7 +426,9 @@ export default function Products() {
               <LinkPicker editing={editing} setEditing={setEditing} products={products} />
 
               <div className="flex gap-2 pt-2">
-                <button className="lm-btn lm-btn-olive" onClick={save} data-testid="save-product">Salvar</button>
+                <button className="lm-btn lm-btn-olive" onClick={save} disabled={isPending("save")} data-testid="save-product">
+                  {isPending("save") ? "Salvando..." : "Salvar"}
+                </button>
                 <button className="lm-btn lm-btn-outline" onClick={() => setEditing(null)}>Cancelar</button>
               </div>
             </div>

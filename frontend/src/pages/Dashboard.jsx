@@ -8,6 +8,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, 
 import { DASHBOARD_KPIS, getVisibleDashboardGridPositions } from "@/pages/dashboardPreferences";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const ICONS = { Shirt, Footprints, Package, Award, Shield, Star };
 const UNIT = { "Fardamento": "peças", "Calçados": "pares" };
@@ -77,6 +78,7 @@ const printDayClosure = (report) => {
 };
 
 export default function Dashboard() {
+  const { run: withSubmitLock } = useSubmitLock();
   const nav = useNavigate();
   const { dashboardPreferences, user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -126,7 +128,7 @@ export default function Dashboard() {
     }
   };
 
-  const closeDay = async (registerMileage = false) => {
+  const closeDay = (registerMileage = false) => withSubmitLock("close-day", async () => {
     let payload;
     if (registerMileage) {
       const vehicle = vehicles.find((item) => item.id === selectedVehicleId);
@@ -152,7 +154,7 @@ export default function Dashboard() {
     } finally {
       setClosingDay(false);
     }
-  };
+  });
 
   const openClosureHistory = async () => {
     setLoadingClosureHistory(true);

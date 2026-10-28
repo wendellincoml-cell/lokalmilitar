@@ -3,16 +3,18 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults = {}, filter, testid, footer, rowActions, prepareEdit, headerContent }) => {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
+  const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = () => api.get(`/${endpoint}`).then((r) => setRows(filter ? r.data.filter(filter) : r.data));
   useEffect(() => { load(); }, [endpoint]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = async () => {
+  const save = () => withSubmitLock("save", async () => {
     const isHidden = (field) => typeof field.hidden === "function" ? field.hidden(editing) : !!field.hidden;
     const missing = fields.find((f) => !isHidden(f) && f.required && !editing[f.key]);
     if (missing) return toast.error(`${missing.label} é obrigatório`);
@@ -24,7 +26,7 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
       toast.success("Registro salvo");
       setEditing(null); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Erro ao salvar"); }
-  };
+  });
 
   const remove = async (id) => {
     if (!window.confirm("Excluir registro?")) return;
@@ -127,7 +129,9 @@ export const CrudPage = ({ title, subtitle, endpoint, fields, columns, defaults 
                 </label>
               ))}
               <div className="md:col-span-2 flex gap-2 pt-3">
-                <button className="lokal-btn-primary" onClick={save} data-testid={`${testid}-save`}>SALVAR</button>
+                <button className="lokal-btn-primary" onClick={save} disabled={isPending("save")} data-testid={`${testid}-save`}>
+                  {isPending("save") ? "SALVANDO..." : "SALVAR"}
+                </button>
                 <button className="px-4 py-2 border rounded-sm" onClick={() => setEditing(null)}>Cancelar</button>
               </div>
             </div>

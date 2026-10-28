@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Shield } from "lucide-react";
 import { api } from "@/lib/api";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 export default function Login() {
   const { user, login, publicAccess, enterPublicAccess } = useAuth();
@@ -16,34 +17,37 @@ export default function Login() {
   const [remember, setRemember] = useState(true);
   const [registering, setRegistering] = useState(() => Boolean(searchParams.get("invite")));
   const [loading, setLoading] = useState(false);
+  const { run: withSubmitLock } = useSubmitLock();
 
   if (user) return <Navigate to="/" replace />;
 
-  const submit = async (e) => {
+  const submit = (e) => {
     e.preventDefault();
-    setLoading(true);
-    try {
-      if (registering) {
-        if (!inviteCode.trim()) {
-          toast.error("Informe o código de convite fornecido pelo administrador");
+    return withSubmitLock("login", async () => {
+      setLoading(true);
+      try {
+        if (registering) {
+          if (!inviteCode.trim()) {
+            toast.error("Informe o código de convite fornecido pelo administrador");
+            return;
+          }
+          await api.post("/auth/register", { name, email, password, invite_code: inviteCode.trim() });
+          toast.success("Cadastro realizado. Você já pode entrar com acesso de visualização.");
+          setRegistering(false);
+          setPassword("");
+          setInviteCode("");
+          setSearchParams({}, { replace: true });
           return;
         }
-        await api.post("/auth/register", { name, email, password, invite_code: inviteCode.trim() });
-        toast.success("Cadastro realizado. Você já pode entrar com acesso de visualização.");
-        setRegistering(false);
-        setPassword("");
-        setInviteCode("");
-        setSearchParams({}, { replace: true });
-        return;
+        await login(email, password, remember);
+        toast.success("Bem-vindo ao LOKAL MILITAR");
+        nav("/");
+      } catch (error) {
+        toast.error(error.response?.data?.detail || "Erro ao autenticar");
+      } finally {
+        setLoading(false);
       }
-      await login(email, password, remember);
-      toast.success("Bem-vindo ao LOKAL MILITAR");
-      nav("/");
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "Erro ao autenticar");
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   return (

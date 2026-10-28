@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, ExternalLink, Plus, ChevronRight } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
+import useSubmitLock from "@/hooks/useSubmitLock";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
@@ -54,6 +55,7 @@ export default function Stock() {
   const [entrySearch, setEntrySearch] = useState("");
   const [entryDate, setEntryDate] = useState("");
   const [selectedEntryGroups, setSelectedEntryGroups] = useState(() => new Set());
+  const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
     const [p, m, c, o] = await Promise.all([api.get("/products"), api.get("/stock_movements"), api.get("/categories"), api.get("/orders")]);
@@ -99,7 +101,7 @@ export default function Stock() {
   };
 
   const product = products.find((p) => p.id === form.product_id);
-  const submit = async () => {
+  const submit = () => withSubmitLock("movement", async () => {
     if (modal === "in") {
       const invalidIndex = entryItems.findIndex((item) => (
         !item.product_id || !item.size || !Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0
@@ -136,7 +138,7 @@ export default function Stock() {
     await api.post("/stock_movements", { ...form, product_name: product?.name, sku: product?.sku });
     toast.success(form.kind === "ENTRADA" ? "Entrada registrada" : "Saída registrada");
     setModal(null); setForm(BLANK); load();
-  };
+  });
   const delMov = async (id) => {
     if (!window.confirm("Excluir o registro e estornar sua quantidade no estoque?")) return;
     try {
@@ -413,7 +415,9 @@ export default function Stock() {
               </select>
             )}
             <input className="lm-input" placeholder="Observação / motivo" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} data-testid="mov-reason" />
-            <button className={`lm-btn w-full justify-center ${modal === "in" ? "lm-btn-olive" : "lm-btn-red"}`} onClick={submit} data-testid="mov-submit">Registrar</button>
+            <button className={`lm-btn w-full justify-center ${modal === "in" ? "lm-btn-olive" : "lm-btn-red"}`} onClick={submit} disabled={isPending("movement")} data-testid="mov-submit">
+              {isPending("movement") ? "Registrando..." : "Registrar"}
+            </button>
           </div>
         </DialogContent>
       </Dialog>
