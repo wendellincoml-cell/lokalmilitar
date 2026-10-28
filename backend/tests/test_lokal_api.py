@@ -58,6 +58,15 @@ class TestOpenAccess:
         assert response.status_code == 404
 
 
+class TestBackupRestore:
+    def test_restore_rejects_invalid_archive(self, admin):
+        response = admin.post(
+            f"{BASE_URL}/api/dashboard/backups/restore",
+            files={"backup_file": ("invalid.zip", b"not a zip archive", "application/zip")},
+        )
+        assert response.status_code == 400
+
+
 # --- Users / vendedor RBAC ---
 class TestUsers:
     def test_vendor_flow(self, admin):

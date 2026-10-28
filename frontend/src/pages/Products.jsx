@@ -289,7 +289,22 @@ export default function Products() {
                 <div className="w-20 h-20 rounded bg-[#E8E2D5] flex items-center justify-center overflow-hidden">
                   {editing.photo ? <img src={editing.photo} alt="" className="w-full h-full object-cover" /> : <ImageIcon className="text-neutral-500" />}
                 </div>
-                <label className="lm-btn lm-btn-outline cursor-pointer">Enviar foto<input type="file" accept="image/*" hidden onChange={(e) => onPhoto(e.target.files[0])} data-testid="p-photo" /></label>
+                <div className="flex flex-col items-start gap-2">
+                  <label className="lm-btn lm-btn-outline cursor-pointer">
+                    Enviar foto
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(event) => {
+                        onPhoto(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                      data-testid="p-photo"
+                    />
+                  </label>
+                  {editing.photo && <button type="button" className="text-xs text-red-700 underline" onClick={() => setEditing({ ...editing, photo: "" })} data-testid="p-remove-photo">Remover foto</button>}
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="Nome *"><input className="lm-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} data-testid="p-name" /></Field>

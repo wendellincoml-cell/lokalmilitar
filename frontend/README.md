@@ -48,32 +48,9 @@ You may also see any lint errors in the console.
 
 ## Instalar no celular
 
-O app pode ser instalado como PWA após ser publicado em HTTPS. No Android,
-abra o site no Chrome e escolha **Instalar app** ou **Adicionar à tela inicial**.
-No iPhone, abra no Safari, toque em **Compartilhar** e escolha **Adicionar à Tela
-de Início**. A primeira abertura deve ser feita com internet; o app shell e os
-arquivos estáticos visitados ficam disponíveis em cache, mas os dados e as ações
-do sistema ainda dependem da API e de uma conexão ativa. A API e as respostas de
-autenticação não são armazenadas pelo service worker.
-
-Depois de entrar e abrir as telas enquanto estiver online, as respostas da API
-são salvas no IndexedDB deste navegador, separadas por usuário. Se a rede cair,
-o app pode usar essas listas em cache e enfileirar localmente a maioria das
-alterações; a fila é enviada em ordem quando a conexão retorna com o app aberto
-ou na próxima abertura. O indicador de sincronização mostra o que está pendente
-e interrompe o envio quando detecta um conflito para revisão. Uma rejeição do
-servidor ou uma resposta incerta não é reenviada automaticamente, para evitar
-duplicar pedidos e movimentações de estoque.
-As listas relacionadas a pedidos, estoque e despesas são atualizadas com os
-dados do servidor após a sincronização; enquanto a alteração estiver pendente,
-alguns efeitos derivados podem ainda não aparecer no cache local.
-
-Registros e alterações pendentes podem conter dados de clientes e da empresa,
-incluindo assinaturas e fotos de produtos. Use esse recurso apenas em aparelho
-privado. Senhas, convites, gestão de usuários, login e fechamento do dia ainda
-exigem conexão. As permissões offline são provisórias; a API valida cada
-alteração ao sincronizá-la. Para proteção contra duplicidade e detecção de
-conflitos, publique as alterações do backend e do frontend.
+O sistema exige conexão ativa para carregar dados e salvar alterações. Em
+celulares, abra o site no navegador e use a opção do navegador para adicioná-lo
+à tela inicial; isso cria um atalho, mas não permite trabalhar sem internet.
 
 ### `npm test`
 

@@ -296,7 +296,7 @@ export default function Orders({ mode }) {
           <tbody>
             {shownOrders.map(o => (
               <tr key={o.id} className="border-t hover:bg-neutral-50">
-                <td className="p-2 font-bold">{o._offline_pending ? "PENDENTE" : o.number}</td>
+                <td className="p-2 font-bold">{o.number}</td>
                 <td>{formatDateShort(o.created_at)}</td>
                 <td>{o.type}</td>
                 <td>{o.customer_name}</td>

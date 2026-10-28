@@ -14,11 +14,23 @@ import math
 import io
 import tempfile
 import zipfile
+import zlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, Header, Body
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
@@ -52,172 +64,15 @@ app = FastAPI(title="LOKAL MILITAR API")
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
-
 @app.middleware("http")
-async def idempotent_api_writes(request: Request, call_next):
-    operation_id = request.headers.get("X-Offline-Operation-Id")
-    if (
-        not operation_id
-        or request.method in ("GET", "HEAD", "OPTIONS")
-        or not request.url.path.startswith("/api/")
-        or request.url.path.startswith("/api/auth/")
-    ):
-        return await call_next(request)
-
-    try:
-        operation_id = str(uuid.UUID(operation_id))
-    except (ValueError, AttributeError):
-        return JSONResponse(status_code=400, content={"detail": "Chave de operação inválida"})
-
-    authorization = request.headers.get("Authorization", "")
-    actor_id = None
-    actor_role = None
-    if authorization.lower().startswith("bearer "):
-        try:
-            claims = jwt.decode(
-                authorization[7:].strip(), JWT_SECRET, algorithms=[JWT_ALG]
-            )
-            actor = await db.users.find_one(
-                {"id": claims.get("sub")}, {"_id": 0, "id": 1, "role": 1}
-            )
-            if actor:
-                actor_id = actor["id"]
-                actor_role = actor.get("role")
-        except jwt.InvalidTokenError:
-            pass
-    elif public_access_enabled():
-        actor_id = "public-access"
-        actor_role = "admin"
-
-    if not actor_id or actor_role == "visualizador":
-        return await call_next(request)
-    if request.url.path in ("/api/dashboard/close-day", "/api/orders/number-sequence") and actor_role != "admin":
-        return await call_next(request)
-
-    body = await request.body()
-    request_hash = hashlib.sha256(body).hexdigest()
-    request_path = request.url.path
-    operation_key = f"{actor_id}:{operation_id}"
-    original_receive = request._receive
-    body_replayed = False
-
-    async def replay_body():
-        nonlocal body_replayed
-        if not body_replayed:
-            body_replayed = True
-            return {"type": "http.request", "body": body, "more_body": False}
-        return await original_receive()
-
-    request._receive = replay_body
-    existing = await db.offline_idempotency.find_one({"_id": operation_key})
-    if existing:
-        if (
-            existing.get("method") != request.method
-            or existing.get("path") != request_path
-            or existing.get("request_hash") != request_hash
-        ):
-            return JSONResponse(
-                status_code=409,
-                content={"detail": "A chave de operação já foi usada para outra alteração"},
-            )
-        if existing.get("status") == "complete":
-            return Response(
-                content=existing.get("body", ""),
-                status_code=existing.get("status_code", 200),
-                media_type=existing.get("content_type", "application/json"),
-            )
-        if existing.get("status") == "uncertain":
-            return JSONResponse(
-                status_code=409,
-                content={"detail": "O resultado desta alteração é incerto. Confirme no servidor antes de tentar novamente"},
-            )
-        try:
-            started_at = datetime.fromisoformat(existing.get("created_at", ""))
-            if datetime.now(timezone.utc) - started_at > timedelta(minutes=5):
-                await db.offline_idempotency.update_one(
-                    {"_id": operation_key, "status": "processing"},
-                    {"$set": {"status": "uncertain", "completed_at": now_iso()}},
-                )
-                return JSONResponse(
-                    status_code=409,
-                    content={"detail": "O resultado desta alteração é incerto. Confirme no servidor antes de tentar novamente"},
-                )
-        except ValueError:
-            pass
+async def reject_legacy_offline_writes(request: Request, call_next):
+    if request.headers.get("X-Offline-Operation-Id"):
         return JSONResponse(
-            status_code=409,
-            content={"detail": "A alteração ainda está sendo processada; tente sincronizar novamente"},
+            status_code=410,
+            content={"detail": "A sincronização offline foi desativada. Atualize o aplicativo."},
         )
+    return await call_next(request)
 
-    claim = {
-        "_id": operation_key,
-        "method": request.method,
-        "path": request_path,
-        "request_hash": request_hash,
-        "status": "processing",
-        "created_at": now_iso(),
-    }
-    try:
-        await db.offline_idempotency.insert_one(claim)
-    except DuplicateKeyError:
-        existing = await db.offline_idempotency.find_one({"_id": operation_key})
-        if existing and existing.get("status") == "complete":
-            if (
-                existing.get("method") == request.method
-                and existing.get("path") == request_path
-                and existing.get("request_hash") == request_hash
-            ):
-                return Response(
-                    content=existing.get("body", ""),
-                    status_code=existing.get("status_code", 200),
-                    media_type=existing.get("content_type", "application/json"),
-                )
-        if existing and existing.get("status") == "uncertain":
-            return JSONResponse(
-                status_code=409,
-                content={"detail": "O resultado desta alteração é incerto. Confirme no servidor antes de tentar novamente"},
-            )
-        return JSONResponse(
-            status_code=409,
-            content={"detail": "A alteração ainda está sendo processada; tente sincronizar novamente"},
-        )
-
-    try:
-        response = await call_next(request)
-        response_body = b"".join([chunk async for chunk in response.body_iterator])
-        if response.status_code < 500:
-            await db.offline_idempotency.update_one(
-                {"_id": operation_key},
-                {"$set": {
-                    "status": "complete",
-                    "status_code": response.status_code,
-                    "content_type": response.headers.get("content-type", "application/json"),
-                    "body": response_body.decode("utf-8"),
-                    "completed_at": now_iso(),
-                }},
-            )
-        else:
-            await db.offline_idempotency.update_one(
-                {"_id": operation_key},
-                {"$set": {
-                    "status": "uncertain",
-                    "status_code": response.status_code,
-                    "content_type": response.headers.get("content-type", "application/json"),
-                    "body": response_body.decode("utf-8"),
-                    "completed_at": now_iso(),
-                }},
-            )
-        return Response(
-            content=response_body,
-            status_code=response.status_code,
-            media_type=response.headers.get("content-type", "application/json"),
-        )
-    except Exception:
-        await db.offline_idempotency.update_one(
-            {"_id": operation_key},
-            {"$set": {"status": "uncertain", "completed_at": now_iso()}},
-        )
-        raise
 
 def public_access_enabled() -> bool:
     return os.environ.get("PUBLIC_ACCESS_MODE", "").strip().lower() == "true"
@@ -1790,6 +1645,108 @@ async def download_day_backup(backup_id: str, user: dict = Depends(require_admin
         headers={"Content-Disposition": f'attachment; filename="{backup["filename"]}"'},
     )
 
+def _read_backup_archive(backup_file) -> dict:
+    max_uncompressed_size = 512 * 1024 * 1024
+    try:
+        with zipfile.ZipFile(backup_file) as archive:
+            entries = archive.infolist()
+            entry_names = [entry.filename for entry in entries]
+            if len(entry_names) != len(set(entry_names)):
+                raise ValueError("O arquivo contém caminhos duplicados")
+            if sum(entry.file_size for entry in entries) > max_uncompressed_size:
+                raise ValueError("O arquivo excede o limite de restauração")
+            if "manifest.json" not in entry_names:
+                raise ValueError("Manifesto ausente")
+
+            if archive.getinfo("manifest.json").file_size > 1024 * 1024:
+                raise ValueError("Manifesto muito grande")
+            manifest = json_util.loads(archive.read("manifest.json"))
+            collection_names = manifest.get("collections")
+            if (
+                manifest.get("format") != "MongoDB Extended JSON"
+                or not isinstance(collection_names, list)
+                or "settings" not in collection_names
+            ):
+                raise ValueError("Manifesto de backup inválido")
+            if len(collection_names) != len(set(collection_names)):
+                raise ValueError("Lista de coleções inválida")
+
+            expected_entries = {"manifest.json"}
+            for name in collection_names:
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or name.startswith("$")
+                    or name.startswith("system.")
+                    or "/" in name
+                    or "\\" in name
+                    or name in {"backups", "fs.files", "fs.chunks"}
+                ):
+                    raise ValueError("Nome de coleção inválido")
+                expected_entries.add(f"data/{name}.json")
+            if set(entry_names) != expected_entries:
+                raise ValueError("Arquivos do backup não correspondem ao manifesto")
+
+            collections = {}
+            for name in collection_names:
+                documents = json_util.loads(archive.read(f"data/{name}.json"))
+                if not isinstance(documents, list) or any(
+                    not isinstance(item, dict) for item in documents
+                ):
+                    raise ValueError("Dados de coleção inválidos")
+                collections[name] = documents
+            if not collections["settings"]:
+                raise ValueError("Configurações ausentes")
+            return collections
+    except (
+        zipfile.BadZipFile,
+        zlib.error,
+        AttributeError,
+        EOFError,
+        KeyError,
+        NotImplementedError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise HTTPException(status_code=400, detail="Arquivo de backup inválido ou incompatível") from error
+
+
+@api.post("/dashboard/backups/restore")
+async def restore_day_backup(
+    backup_file: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    collections = _read_backup_archive(backup_file.file)
+    current_backup = await _create_day_backup(
+        datetime.now(BUSINESS_TIMEZONE).date().isoformat()
+    )
+    existing_names = await db.list_collection_names()
+    collection_names = (
+        set(existing_names) | set(collections)
+    ) - {"backups", "fs.files", "fs.chunks", "offline_idempotency"}
+    collection_names = {name for name in collection_names if not name.startswith("system.")}
+
+    try:
+        for name in collection_names:
+            await db[name].delete_many({})
+            documents = collections.get(name, [])
+            if documents:
+                await db[name].insert_many(documents)
+    except Exception as error:
+        logger.exception("Falha ao restaurar backup. Cópia preventiva: %s", current_backup["id"])
+        raise HTTPException(
+            status_code=500,
+            detail=f"Falha ao restaurar os dados. Foi criado um backup preventivo ({current_backup['id']}).",
+        ) from error
+
+    return {
+        "message": "Backup restaurado com sucesso",
+        "safety_backup_id": current_backup["id"],
+        "safety_backup_filename": current_backup["filename"],
+    }
+
 @api.post("/dashboard/close-day")
 async def close_dashboard_day(
     payload: Optional[DayClosureInput] = Body(default=None),
@@ -1943,6 +1900,8 @@ logger = logging.getLogger("lokal")
 
 @app.on_event("startup")
 async def startup():
+    if "offline_idempotency" in await db.list_collection_names():
+        await db.offline_idempotency.drop()
     # Seed size grids
     if await db.size_grids.count_documents({}) == 0:
         await db.size_grids.insert_many([

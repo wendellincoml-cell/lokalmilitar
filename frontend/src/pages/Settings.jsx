@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth, DEFAULT_THEME } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Trash2, Download } from "lucide-react";
+import { Trash2, Download, Upload } from "lucide-react";
 import {
   DASHBOARD_KPIS,
   DEFAULT_DASHBOARD_PREFERENCES,
@@ -303,6 +303,8 @@ export default function Settings() {
   const [resetMode, setResetMode] = useState("all");
   const [selectedResetGroups, setSelectedResetGroups] = useState([]);
   const [dayBackups, setDayBackups] = useState([]);
+  const [backupFile, setBackupFile] = useState(null);
+  const [restoringBackup, setRestoringBackup] = useState(false);
   const isAdmin = user?.role === "admin";
 
   const loadUsers = () => api.get("/auth/users").then((r) => {
@@ -374,6 +376,33 @@ export default function Settings() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível baixar o backup");
+    }
+  };
+
+  const restoreBackup = async () => {
+    if (!backupFile) {
+      toast.error("Selecione um arquivo ZIP de backup");
+      return;
+    }
+    if (!window.confirm("A restauração substituirá produtos, pedidos, usuários, configurações e os demais dados pelos dados do backup. Os backups existentes serão preservados e uma cópia preventiva será criada. Deseja continuar?")) return;
+    if (window.prompt('Para confirmar, digite "RESTAURAR":') !== "RESTAURAR") {
+      toast.error("Restauração cancelada: confirmação não corresponde");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("backup_file", backupFile);
+    setRestoringBackup(true);
+    try {
+      const { data } = await api.post("/dashboard/backups/restore", formData);
+      toast.success(`Backup restaurado. Cópia preventiva criada: ${data.safety_backup_filename}`);
+      setBackupFile(null);
+      await loadDayBackups();
+      window.setTimeout(() => window.location.reload(), 1500);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível restaurar o backup");
+    } finally {
+      setRestoringBackup(false);
     }
   };
 
@@ -676,6 +705,27 @@ export default function Settings() {
         ) : (
           <p className="text-sm text-neutral-500">Nenhum backup de fechamento registrado.</p>
         )}
+        <div className="border-t pt-3 space-y-2" data-testid="restore-backup-section">
+          <h3 className="font-head text-sm">Restaurar a partir de um backup</h3>
+          <p className="text-xs text-red-800">Esta ação substitui produtos, pedidos, usuários, configurações e os demais dados pelos dados do arquivo ZIP. Faça a restauração apenas com um backup deste sistema; os backups já salvos serão preservados e uma cópia preventiva será criada antes da alteração.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="file"
+              accept=".zip,application/zip"
+              onChange={(event) => setBackupFile(event.target.files?.[0] || null)}
+              aria-label="Arquivo ZIP de backup"
+              data-testid="restore-backup-file"
+            />
+            <button
+              className="lm-btn lm-btn-dark"
+              onClick={restoreBackup}
+              disabled={!backupFile || restoringBackup}
+              data-testid="restore-backup-submit"
+            >
+              <Upload size={14} />{restoringBackup ? "Restaurando..." : "Restaurar backup"}
+            </button>
+          </div>
+        </div>
       </section>}
 
       <section className="lokal-panel p-4">
