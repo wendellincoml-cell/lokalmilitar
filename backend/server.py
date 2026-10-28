@@ -7,6 +7,7 @@ import os
 import uuid
 import secrets
 import hashlib
+import asyncio
 import jwt
 import bcrypt
 import logging
@@ -849,8 +850,32 @@ async def consume_supply(expense_id: str, payload: dict, user: dict = Depends(ge
 
 # ---------- Products (custom to validate kit) ----------
 @api.get("/products")
-async def list_products(user: dict = Depends(get_current_user)):
-    return await db.products.find({}, {"_id": 0}).to_list(5000)
+async def list_products(
+    include_photos: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    projection = {"_id": 0}
+    if not include_photos:
+        projection["photo"] = 0
+    return await db.products.find({}, projection).to_list(5000)
+
+@api.get("/products/{pid}")
+async def get_product(pid: str, user: dict = Depends(get_current_user)):
+    product = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Produto não encontrado")
+    return product
+
+@api.get("/products/{pid}/photo")
+async def get_product_photo(pid: str, user: dict = Depends(get_current_user)):
+    product = await db.products.find_one(
+        {"id": pid}, {"_id": 0, "photo": 1}
+    )
+    if not product:
+        raise HTTPException(404, "Produto não encontrado")
+    if not product.get("photo"):
+        raise HTTPException(404, "Produto sem foto")
+    return {"photo": product["photo"]}
 
 @api.post("/products")
 async def create_product(payload: dict, user: dict = Depends(get_current_user)):
@@ -1826,8 +1851,40 @@ async def close_dashboard_day(
 
 @api.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7, ge=7, le=30)):
-    products = await db.products.find({}, {"_id": 0}).to_list(5000)
-    categories = await db.categories.find({}, {"_id": 0}).to_list(500)
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    cur_month = now.strftime("%Y-%m")
+    next_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1).strftime("%Y-%m")
+    soon = (now + timedelta(days=15)).strftime("%Y-%m-%d")
+    chart_start = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    products, categories, orders, customers, coms, exps = await asyncio.gather(
+        db.products.find({}, {
+            "_id": 0, "id": 1, "name": 1, "sku": 1, "price": 1, "sizes": 1,
+            "category_id": 1,
+        }).to_list(5000),
+        db.categories.find({}, {"_id": 0}).to_list(500),
+        db.orders.find({
+            "$or": [
+                {"created_at": {"$gte": chart_start}},
+                {"status": {"$in": ["Orçamento", "Aprovado", "Separado"]}},
+            ],
+        }, {
+            "_id": 0, "created_at": 1, "status": 1, "total": 1, "type": 1,
+        }).to_list(5000),
+        db.customers.count_documents({}),
+        db.commissions.find({"created_at": {"$gte": cur_month, "$lt": next_month}}, {
+            "_id": 0, "amount": 1, "created_at": 1,
+        }).to_list(5000),
+        db.expenses.find({
+            "$or": [
+                {"date": {"$gte": cur_month, "$lt": next_month}},
+                {"type": "MANUTENCAO", "next_review_date": {"$lte": soon}},
+            ],
+        }, {
+            "_id": 0, "amount": 1, "fuel_cost": 1, "toll_cost": 1, "date": 1,
+            "type": 1, "next_review_date": 1,
+        }).to_list(5000),
+    )
     cat_map = {c["id"]: c for c in categories}
     totals_by_cat = {c["name"]: {"qty": 0, "value": 0, "color": c.get("color", "#4B5320")}
                      for c in categories if not c.get("parent_id")}
@@ -1844,32 +1901,26 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
             if float(s.get("stock", 0)) <= float(s.get("stock_min", 0)) and float(s.get("stock_min", 0)) > 0:
                 low_stock.append({"id": p["id"], "name": p["name"], "sku": p.get("sku"),
                                   "size": s["size"], "stock": s["stock"], "stock_min": s["stock_min"]})
-    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     orders_today = [o for o in orders if (o.get("created_at", "") or "").startswith(today)]
     pending = [o for o in orders if o.get("status") in ("Orçamento", "Aprovado", "Separado")]
-    customers = await db.customers.count_documents({})
     # commission month
-    cur_month = datetime.now(timezone.utc).strftime("%Y-%m")
-    coms = await db.commissions.find({}, {"_id": 0}).to_list(5000)
     com_month = sum(c.get("amount", 0) for c in coms if (c.get("created_at", "") or "").startswith(cur_month))
     # expenses month
-    exps = await db.expenses.find({}, {"_id": 0}).to_list(5000)
     month_exps = [e for e in exps if (e.get("date", "") or "").startswith(cur_month)]
     exp_month = sum(e.get("amount", 0) + e.get("fuel_cost", 0) + e.get("toll_cost", 0) for e in month_exps)
     insumos_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "INSUMO")
     manut_month = sum(e.get("amount", 0) for e in month_exps if e.get("type") == "MANUTENCAO")
-    soon = (datetime.now(timezone.utc) + timedelta(days=15)).strftime("%Y-%m-%d")
     manut_alerts = sum(1 for e in exps if e.get("type") == "MANUTENCAO" and e.get("next_review_date") and e["next_review_date"][:10] <= soon)
     # sales chart last 7 days
     chart = []
+    orders_by_day = {}
+    for order in orders:
+        order_date = (order.get("created_at", "") or "")[:10]
+        if order_date >= chart_start and order.get("status") in ACTIVE_STATUSES and order.get("type") == "VENDA":
+            orders_by_day[order_date] = orders_by_day.get(order_date, 0) + order.get("total", 0)
     for i in range(days - 1, -1, -1):
-        day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
-        total_day = sum(o.get("total", 0) for o in orders
-                        if (o.get("created_at", "") or "").startswith(day)
-                        and o.get("status") in ACTIVE_STATUSES
-                        and o.get("type") == "VENDA")
-        chart.append({"date": day, "value": total_day})
+        day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        chart.append({"date": day, "value": orders_by_day.get(day, 0)})
     return {
         "totals_by_cat": totals_by_cat,
         "orders_today": len(orders_today),
@@ -1927,7 +1978,12 @@ async def startup():
     # Indexes
     await db.users.create_index("email", unique=True)
     await db.products.create_index("sku")
+    await db.products.create_index("id")
     await db.orders.create_index("number")
+    await db.orders.create_index("created_at")
+    await db.commissions.create_index("created_at")
+    await db.expenses.create_index("date")
+    await db.stock_movements.create_index("created_at")
     await db.day_closures.create_index("date", unique=True)
     logger.info("LOKAL MILITAR API started.")
 

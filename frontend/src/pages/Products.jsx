@@ -21,6 +21,49 @@ const SizeChips = ({ sizes }) => (
   </div>
 );
 
+function ProductThumbnail({ product }) {
+  const imageRef = React.useRef(null);
+  const [photo, setPhoto] = useState("");
+
+  useEffect(() => {
+    if (!imageRef.current) return undefined;
+    let active = true;
+    const loadPhoto = async () => {
+      try {
+        const { data } = await api.get(`/products/${product.id}/photo`);
+        if (active) setPhoto(data.photo);
+      } catch (error) {
+        if (active && error.response?.status !== 404) {
+          console.error(`Não foi possível carregar a foto do produto ${product.id}.`, error);
+        }
+      }
+    };
+
+    if (!("IntersectionObserver" in window)) {
+      loadPhoto();
+      return () => { active = false; };
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        loadPhoto();
+      }
+    }, { rootMargin: "100px" });
+    observer.observe(imageRef.current);
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }, [product.id]);
+
+  return (
+    <div ref={imageRef} className="w-11 h-11 rounded bg-[#E8E2D5] flex items-center justify-center overflow-hidden">
+      {photo ? <img src={photo} alt={product.name} className="w-full h-full object-cover" /> : <ImageIcon size={18} className="text-neutral-500" />}
+    </div>
+  );
+}
+
 function LinkPicker({ editing, setEditing, products }) {
   const [q, setQ] = useState("");
   const ids = editing.linked_ids || [];
@@ -148,9 +191,16 @@ export default function Products() {
   };
   useEffect(() => { load(); }, []);
   useEffect(() => {
-    const p = products.find((x) => x.id === params.get("edit"));
-    if (p) setEditing(JSON.parse(JSON.stringify(p)));
-  }, [params, products]);
+    const productId = params.get("edit");
+    if (!productId) return undefined;
+    let active = true;
+    api.get(`/products/${productId}`).then(({ data }) => {
+      if (active) setEditing(JSON.parse(JSON.stringify(data)));
+    }).catch((error) => {
+      if (active) toast.error(error.response?.data?.detail || "Não foi possível carregar o produto");
+    });
+    return () => { active = false; };
+  }, [params]);
 
   const byId = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p])), [products]);
   const catName = (id) => categories.find((c) => c.id === id)?.name || "-";
@@ -166,6 +216,14 @@ export default function Products() {
       else await api.post("/products", editing);
       toast.success("Produto salvo"); setEditing(null); load();
     } catch { toast.error("Erro ao salvar"); }
+  };
+  const openEdit = async (productId) => {
+    try {
+      const { data } = await api.get(`/products/${productId}`);
+      setEditing(JSON.parse(JSON.stringify(data)));
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível carregar o produto");
+    }
   };
   const remove = async (id) => { if (!window.confirm("Excluir produto?")) return; await api.delete(`/products/${id}`); toast.success("Removido"); load(); };
   const onPhoto = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => setEditing((e) => ({ ...e, photo: r.result })); r.readAsDataURL(f); };
@@ -245,9 +303,7 @@ export default function Products() {
               return (
                 <tr key={p.id} data-testid={`product-row-${p.sku}`}>
                   <td className="w-14">
-                    <div className="w-11 h-11 rounded bg-[#E8E2D5] flex items-center justify-center overflow-hidden">
-                      {p.photo ? <img src={p.photo} alt={p.name} className="w-full h-full object-cover" /> : <ImageIcon size={18} className="text-neutral-500" />}
-                    </div>
+                    <ProductThumbnail product={p} />
                   </td>
                   <td>
                     <div className="font-head font-semibold text-[15px]">{p.name}</div>
@@ -266,7 +322,7 @@ export default function Products() {
                       <button className="p-1.5 hover:bg-[#E8E2D5] rounded" title="Desmontar" onClick={() => setDesmontar(p)} data-testid={`desmontar-${p.sku}`}><Scissors size={16} /></button>
                       <button className="p-1.5 hover:bg-[#E8E2D5] rounded" title="Montar" onClick={() => setMontar(p)} data-testid={`montar-${p.sku}`}><PackagePlus size={16} /></button>
                     </>}
-                    <button className="p-1.5 hover:bg-[#E8E2D5] rounded" onClick={() => setEditing(JSON.parse(JSON.stringify(p)))} data-testid={`edit-${p.sku}`}><Pencil size={16} /></button>
+                    <button className="p-1.5 hover:bg-[#E8E2D5] rounded" onClick={() => openEdit(p.id)} data-testid={`edit-${p.sku}`}><Pencil size={16} /></button>
                     <button className="p-1.5 hover:bg-red-100 rounded" onClick={() => remove(p.id)} data-testid={`delete-${p.sku}`}><Trash2 size={16} /></button>
                   </td>
                 </tr>

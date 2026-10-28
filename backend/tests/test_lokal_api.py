@@ -90,6 +90,28 @@ class TestUsers:
 
 # --- Products ---
 class TestProducts:
+    def test_product_list_omits_photos_and_detail_includes_them(self, admin):
+        photo = "data:image/png;base64,Zm9v"
+        product = _prod(
+            admin,
+            "TEST_Produto com foto",
+            [{"size": "M", "stock": 1}],
+            photo=photo,
+        )
+
+        listing = admin.get(f"{BASE_URL}/api/products")
+        assert listing.status_code == 200
+        listed_product = next(item for item in listing.json() if item["id"] == product["id"])
+        assert "photo" not in listed_product
+
+        detail = admin.get(f"{BASE_URL}/api/products/{product['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["photo"] == photo
+
+        image = admin.get(f"{BASE_URL}/api/products/{product['id']}/photo")
+        assert image.status_code == 200
+        assert image.json()["photo"] == photo
+
     def test_crud_with_sizes_and_kit(self, admin):
         a = _prod(admin, "TEST_Boina", [{"size": "M", "stock": 3, "stock_min": 1}])
         kit = _prod(admin, "TEST_Kit Conjunto", [{"size": "M", "stock": 1}], is_kit=True,

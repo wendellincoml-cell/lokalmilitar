@@ -103,14 +103,33 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false;
+    const applySettings = (response) => {
+      if (cancelled) return;
+      if (response.data.background_color) applyBg(response.data.background_color);
+      if (response.data.panel_color) applyPanel(response.data.panel_color);
+      if (response.data.theme) applyTheme(response.data.theme);
+      if (response.data.dashboard_preferences) applyDashboardPreferences(response.data.dashboard_preferences);
+    };
     const initialize = async () => {
-      const modeResponse = await api.get("/auth/mode").catch(() => null);
+      const modeRequest = api.get("/auth/mode").catch((error) => {
+        console.error("Não foi possível verificar o modo de acesso.", error);
+        return null;
+      });
+      const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
+      const userRequest = token
+        ? api.get("/auth/me").then((response) => ({ response }), (error) => ({ error }))
+        : null;
+      if (token) {
+        api.get("/settings").then(applySettings).catch((error) => {
+          console.error("Não foi possível carregar as configurações.", error);
+        });
+      }
+      const modeResponse = await modeRequest;
       const isPublic = Boolean(modeResponse?.data?.public_access);
       if (cancelled) return;
       setPublicAccess(isPublic);
       if (!isPublic) sessionStorage.removeItem("lokal_public_access");
 
-      const token = localStorage.getItem("lokal_token") || sessionStorage.getItem("lokal_token");
       if (!token) {
         const publicSession = isPublic && sessionStorage.getItem("lokal_public_access") === "true";
         const publicUser = publicSession ? {
@@ -120,11 +139,16 @@ export function AuthProvider({ children }) {
           role: "admin",
         } : null;
         setUser(publicUser);
+        if (publicUser) {
+          api.get("/settings").then(applySettings).catch((error) => {
+            console.error("Não foi possível carregar as configurações.", error);
+          });
+        }
         return;
       }
-      const userStorage = localStorage.getItem("lokal_token") ? localStorage : sessionStorage;
       try {
-        const response = await api.get("/auth/me");
+        const { response, error } = await userRequest;
+        if (error) throw error;
         if (!cancelled) {
           setUser(response.data);
         }
@@ -139,27 +163,10 @@ export function AuthProvider({ children }) {
           }
         }
       }
-      if (cancelled) return;
-      api.get("/settings").then((r) => {
-        if (r.data.background_color) applyBg(r.data.background_color);
-        if (r.data.panel_color) applyPanel(r.data.panel_color);
-        if (r.data.theme) applyTheme(r.data.theme);
-        if (r.data.dashboard_preferences) applyDashboardPreferences(r.data.dashboard_preferences);
-      }).catch(() => {});
     };
     initialize();
     return () => { cancelled = true; };
   }, [applyDashboardPreferences]);
-
-  useEffect(() => {
-    if (!user || user.id !== "public-access") return;
-    api.get("/settings").then((r) => {
-      if (r.data.background_color) applyBg(r.data.background_color);
-      if (r.data.panel_color) applyPanel(r.data.panel_color);
-      if (r.data.theme) applyTheme(r.data.theme);
-      if (r.data.dashboard_preferences) applyDashboardPreferences(r.data.dashboard_preferences);
-    }).catch(() => {});
-  }, [user, applyDashboardPreferences]);
 
   const login = async (email, password, remember = true) => {
     const { data } = await api.post("/auth/login", { email, password });
