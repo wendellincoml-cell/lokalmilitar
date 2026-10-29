@@ -123,19 +123,13 @@ export default function PrintOrderA4({ order, settings, customer, vendor, captur
         <Box title="Cliente">
           <Info label="Nome / Loja" value={order.customer_name || customer?.name} strong />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Info label="CPF / CNPJ" value={customer?.cpf} />
             <Info label="Telefone" value={customer?.phone} />
-            <Info label="Patente / OM" value={customer?.patente_om} />
             <Info label="Endereço" value={customer?.address} />
           </div>
         </Box>
         <Box title="Atendimento">
           <Info label="Vendedor" value={order.vendor_name} strong />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Info label="Telefone do vendedor" value={vendor?.phone} />
-            <Info label="CPF do vendedor" value={vendor?.cpf} />
-          </div>
-          <Info label="Forma de pagamento" value={order.payment} />
+          <Info label="Telefone do vendedor" value={vendor?.phone} />
           {order.delivery_type === "CORREIO" && <Info label="Forma de entrega" value="Correio/transportadora" />}
           {order.status === "Entregue" && order.delivery_type === "ENTREGA" && order.vehicle_name && <Info label="Veículo utilizado" value={order.vehicle_name} />}
           {order.original_order_id && <Info label="Referente ao pedido" value={order.original_number ? `#${order.original_number}` : "Vinculado"} />}
