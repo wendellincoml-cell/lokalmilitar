@@ -495,13 +495,37 @@ def test_dashboard(admin):
 
 
 def test_day_close_is_saved_and_idempotent(admin):
+    product = _prod(admin, "TEST_Fechamento_Estoque", [{"size": "U", "stock": 100}])
     order_response = admin.post(
         f"{BASE_URL}/api/orders",
-        json={"customer_name": "TEST_Fechamento", "items": [], "status": "Orçamento"},
+        json={
+            "customer_name": "TEST_Fechamento",
+            "items": [{
+                "product_id": product["id"],
+                "name": product["name"],
+                "size": "U",
+                "qty": 23,
+                "unit_price": 1,
+            }],
+            "returned_items": [{
+                "product_id": product["id"],
+                "name": product["name"],
+                "size": "U",
+                "qty": 5,
+                "reason": "TEST_Devolução",
+            }],
+            "status": "Aprovado",
+        },
     )
     assert order_response.status_code == 200, order_response.text
     order = order_response.json()
     CREATED["orders"].append(order["id"])
+    fulfilled = admin.post(
+        f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+        json={"delivery_type": "RETIRADA"},
+    )
+    assert fulfilled.status_code == 200, fulfilled.text
+    assert fulfilled.json()["fulfilled_at"]
 
     vehicle_response = admin.post(
         f"{BASE_URL}/api/vehicles",
@@ -525,6 +549,10 @@ def test_day_close_is_saved_and_idempotent(admin):
     report = first.json()
     assert {"id", "date", "closed_at", "summary", "orders", "stock_movements", "expenses"} <= report.keys()
     assert {"orders_count", "orders_total", "stock_movements_count", "expenses_count", "expenses_total"} <= report["summary"].keys()
+    assert report["summary"]["stock_out_quantity"] >= 23
+    assert report["summary"]["stock_return_quantity"] >= 5
+    assert report["summary"]["stock_reconciliation_count"] == 0
+    assert report["stock_reconciliation"] == []
     assert any(item["id"] == order["id"] for item in report["orders"])
     mileage_trip = next(
         expense for expense in report["expenses"]

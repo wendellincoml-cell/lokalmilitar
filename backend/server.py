@@ -1281,6 +1281,7 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
             raise HTTPException(400, "Use a ação Entregar/Retirar para concluir o pedido")
     payload.pop("id", None)
     payload.pop("number", None)
+    payload.pop("fulfilled_at", None)
     items = payload.get("items", old.get("items", []))
     subtotal = sum(float(it.get("qty", 1)) * float(it.get("unit_price", 0)) for it in items)
     for it in items:
@@ -1288,6 +1289,15 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     payload["items"] = items
     discount = float(payload.get("discount", old.get("discount", 0)))
     payload["total"] = max(0, subtotal - discount)
+    candidate = {**old, **payload}
+    stock_fields_changed_before_update = (
+        _stock_relevant_order_fields(old) != _stock_relevant_order_fields(candidate)
+    )
+    if _order_is_fulfilled(candidate):
+        if not _order_is_fulfilled(old) or stock_fields_changed_before_update:
+            payload["fulfilled_at"] = now_iso()
+    elif old.get("fulfilled_at") is not None:
+        payload["fulfilled_at"] = None
     old_stock_applied = old.get("stock_applied")
     if old_stock_applied is None:
         old_stock_applied = await _has_order_stock_movements(oid)
@@ -1588,8 +1598,72 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
     orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
     day_orders = [
         order for order in orders
-        if _business_date(order.get("created_at")) == day or order.get("id") in related_order_ids
+        if (
+            _business_date(order.get("created_at")) == day
+            or _business_date(order.get("fulfilled_at")) == day
+            or order.get("id") in related_order_ids
+        )
     ]
+    expected_movements = {}
+    day_orders_by_id = {order["id"]: order for order in day_orders}
+    for order in day_orders:
+        if (
+            not _order_is_fulfilled(order)
+            or order.get("type") not in ("VENDA", "TROCA", "DEVOLUCAO")
+        ):
+            continue
+        for field, kind in (("items", "SAIDA"), ("returned_items", "ENTRADA")):
+            for item in order.get(field) or []:
+                key = (order["id"], item.get("product_id"), item.get("size"), kind)
+                expected_movements.setdefault(key, {
+                    "order_number": order.get("number"),
+                    "product_name": item.get("name") or item.get("product_name") or "Produto",
+                    "size": item.get("size"),
+                    "kind": kind,
+                    "expected_qty": 0.0,
+                })
+                expected_movements[key]["expected_qty"] += abs(float(item.get("qty") or 0))
+
+    recorded_movements = {}
+    recorded_product_names = {}
+    for movement in day_movements:
+        if movement.get("kind") not in ("SAIDA", "ENTRADA") or not movement.get("order_id"):
+            continue
+        key = (
+            movement["order_id"],
+            movement.get("product_id"),
+            movement.get("size"),
+            movement["kind"],
+        )
+        recorded_movements[key] = recorded_movements.get(key, 0.0) + abs(
+            float(movement.get("qty") or 0)
+        )
+        recorded_product_names.setdefault(key, movement.get("product_name"))
+
+    stock_reconciliation = []
+    for key in expected_movements.keys() | recorded_movements.keys():
+        expected = expected_movements.get(key)
+        expected_qty = expected["expected_qty"] if expected else 0.0
+        recorded_qty = recorded_movements.get(key, 0.0)
+        if math.isclose(expected_qty, recorded_qty):
+            continue
+        order_id, _, size, kind = key
+        order = day_orders_by_id.get(order_id, {})
+        stock_reconciliation.append({
+            "order_id": order_id,
+            "order_number": (expected or {}).get("order_number", order.get("number")),
+            "product_name": (expected or {}).get("product_name")
+            or recorded_product_names.get(key)
+            or "Produto",
+            "size": size,
+            "kind": kind,
+            "expected_qty": expected_qty,
+            "recorded_qty": recorded_qty,
+            "difference_qty": expected_qty - recorded_qty,
+        })
+    stock_reconciliation.sort(
+        key=lambda item: (item.get("order_number") or 0, item["product_name"], item["size"] or "")
+    )
     return {
         "id": (existing or {}).get("id") or new_id(),
         "date": day,
@@ -1601,6 +1675,17 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
             "orders_count": len(day_orders),
             "orders_total": sum(float(order.get("total") or 0) for order in day_orders),
             "stock_movements_count": len(day_movements),
+            "stock_out_quantity": sum(
+                abs(float(movement.get("qty") or 0))
+                for movement in day_movements
+                if movement.get("kind") == "SAIDA"
+            ),
+            "stock_return_quantity": sum(
+                abs(float(movement.get("qty") or 0))
+                for movement in day_movements
+                if movement.get("kind") == "ENTRADA" and movement.get("order_id")
+            ),
+            "stock_reconciliation_count": len(stock_reconciliation),
             "expenses_count": len(day_expenses),
             "expenses_total": sum(
                 float(expense.get("amount") or 0)
@@ -1611,6 +1696,7 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
         },
         "orders": day_orders,
         "stock_movements": day_movements,
+        "stock_reconciliation": stock_reconciliation,
         "expenses": day_expenses,
     }
 
@@ -1674,6 +1760,7 @@ async def get_day_closure(day: str, user: dict = Depends(require_admin)):
         "summary": refreshed["summary"],
         "orders": refreshed["orders"],
         "stock_movements": refreshed["stock_movements"],
+        "stock_reconciliation": refreshed["stock_reconciliation"],
         "expenses": refreshed["expenses"],
     }})
     return refreshed
@@ -1861,6 +1948,7 @@ async def close_dashboard_day(
             "summary": report["summary"],
             "orders": report["orders"],
             "stock_movements": report["stock_movements"],
+            "stock_reconciliation": report["stock_reconciliation"],
             "expenses": report["expenses"],
         }})
     else:

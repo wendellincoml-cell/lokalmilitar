@@ -7,6 +7,8 @@ O frontend é publicado na Vercel, a API FastAPI no Render e o banco no MongoDB 
 
 A API comprime respostas HTTP maiores com gzip e carrega assinaturas de pedidos e vendedores somente quando necessárias, reduzindo tráfego e o tempo de carregamento das listas. O dashboard também reutiliza as categorias obtidas pela própria API. O consumo e o desempenho ainda dependem do volume de uso e dos arquivos enviados.
 
+O fechamento do dia compara os itens de pedidos concluídos com as saídas e devoluções registradas no estoque, exibindo divergências por pedido, produto e quantidade. Essa conferência não altera o estoque automaticamente; diferenças históricas devem ser verificadas antes de qualquer ajuste manual.
+
 ### 1. Criar o banco no MongoDB Atlas
 
 1. Crie um cluster e um usuário de banco de dados no Atlas.
