@@ -135,14 +135,30 @@ export default function Orders({ mode }) {
       order_number: order.number,
       customer_name: order.customer_name,
       fulfilled_at: order.fulfilled_at || order.created_at,
+      type_label: order.type === "TROCA" ? "Troca" : "Devolução",
       status: order.status,
       id: `${order.id}:${index}`,
     }));
   }), [filterCustomer, filterDateFrom, filterDateTo, filterOrderNumber, filterStatus, orders]);
-  const showOrdersTable = !isTrocas
-    || !ordersLoaded
-    || shownOrders.length > 0
-    || completedOrderReturns.length === 0;
+  const exchangeReturnRecords = useMemo(() => {
+    const representedOrderIds = new Set(completedOrderReturns.map((item) => item.order_id));
+    const pendingExchangeRecords = shownOrders
+      .filter((order) => !representedOrderIds.has(order.id))
+      .flatMap((order) => {
+        const items = order.returned_items?.length ? order.returned_items : order.items || [];
+        return items.map((item, index) => ({
+          ...item,
+          order_id: order.id,
+          order_number: order.number,
+          customer_name: order.customer_name,
+          fulfilled_at: order.fulfilled_at || order.created_at,
+          type_label: order.type === "TROCA" ? "Troca" : "Devolução",
+          status: order.status,
+          id: `${order.id}:${index}`,
+        }));
+      });
+    return [...completedOrderReturns, ...pendingExchangeRecords];
+  }, [completedOrderReturns, shownOrders]);
   const selectedVisibleOrderIds = shownOrders
     .filter((order) => selectedOrderIds.includes(order.id))
     .map((order) => order.id);
@@ -495,14 +511,14 @@ export default function Orders({ mode }) {
         </div>
       </header>
 
-      {isTrocas && completedOrderReturns.length > 0 && (
-        <section className="lm-card p-3 mb-3" aria-label="Devoluções dentro de pedidos concluídos" data-testid="order-embedded-returns">
-          <h2 className="font-head text-sm mb-2">Trocas/devoluções registradas dentro dos pedidos</h2>
+      {isTrocas && (
+        <section className="lm-card p-3 mb-3" aria-label="Trocas e devoluções" data-testid="order-embedded-returns">
+          <h2 className="font-head text-sm mb-2">Trocas e devoluções</h2>
           <div className="lm-table-wrap overflow-x-auto">
             <table className="lm-table">
-              <thead><tr><th>Pedido</th><th>Data</th><th>Cliente</th><th>Produto devolvido</th><th>Tamanho</th><th>Qtd.</th><th>Motivo</th><th>Status</th></tr></thead>
+              <thead><tr><th>Pedido</th><th>Data</th><th>Cliente</th><th>Produto</th><th>Tamanho</th><th>Qtd.</th><th>Motivo</th><th>Tipo</th><th>Status</th></tr></thead>
               <tbody>
-                {completedOrderReturns.map((item) => (
+                {exchangeReturnRecords.map((item) => (
                   <tr key={item.id}>
                     <td>#{item.order_number}</td>
                     <td>{formatDateShort(item.fulfilled_at)}</td>
@@ -511,9 +527,13 @@ export default function Orders({ mode }) {
                     <td>{item.size || "—"}</td>
                     <td>{item.qty}</td>
                     <td>{item.reason || "—"}</td>
+                    <td>{item.type_label}</td>
                     <td>{item.status}</td>
                   </tr>
                 ))}
+                {exchangeReturnRecords.length === 0 && (
+                  <tr><td colSpan={9} className="p-6 text-center text-neutral-500 text-xs">Nenhuma troca ou devolução encontrada.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -618,7 +638,7 @@ export default function Orders({ mode }) {
         </>
       )}
 
-      {showOrdersTable && (
+      {!isTrocas && (
       <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">
           <thead className="bg-neutral-100 text-[11px]">
