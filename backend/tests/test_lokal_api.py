@@ -319,16 +319,20 @@ class TestOrders:
     def test_admin_altera_status_e_sincroniza_estoque(self, admin):
         p = _prod(admin, "TEST_Coturno", [{"size": "40", "stock": 5}])
         o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
-                                                        "items": [{"product_id": p["id"], "name": p["name"], "size": "40", "qty": 2, "unit_price": 10}]}).json()
+                                                        "items": [{"product_id": p["id"], "name": p["name"], "size": "40", "qty": 2, "unit_price": 10}],
+                                                        "returned_items": [{"product_id": p["id"], "name": p["name"], "size": "40", "qty": 1, "reason": "TEST_troca"}]}).json()
         CREATED["orders"].append(o["id"])
 
         completed = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**o, "status": "Retirado"})
         assert completed.status_code == 200, completed.text
-        assert _stock(admin, p["id"], "40") == 3
+        assert _stock(admin, p["id"], "40") == 4
+        movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+        assert sorted((movement["kind"], movement["qty"]) for movement in movements) == [("ENTRADA", 1), ("SAIDA", 2)]
 
         reopened = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**completed.json(), "status": "Aprovado"})
         assert reopened.status_code == 200, reopened.text
         assert _stock(admin, p["id"], "40") == 5
+        assert not [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
 
     def test_desmontagem_farda(self, admin):
         farda = _prod(admin, "TEST_FARDA CAMUFLADA", [{"size": "M", "stock": 1}])
@@ -348,20 +352,36 @@ class TestOrders:
         v = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
                                                         "items": [{"product_id": p["id"], "name": p["name"], "size": "G", "qty": 1, "unit_price": 50}]}).json()
         CREATED["orders"].append(v["id"])
+        original_fulfillment = admin.post(f"{BASE_URL}/api/orders/{v['id']}/fulfill", json={"delivery_type": "RETIRADA"})
+        assert original_fulfillment.status_code == 200, original_fulfillment.text
         assert _stock(admin, p["id"], "G") == 4
-        t = admin.post(f"{BASE_URL}/api/orders", json={"type": "TROCA", "status": "Entregue", "customer_name": "TEST_Cli",
+        t_response = admin.post(f"{BASE_URL}/api/orders", json={"type": "TROCA", "status": "Aprovado", "customer_name": "TEST_Cli",
                                                         "original_order_id": v["id"],
                                                         "items": [{"product_id": p["id"], "name": p["name"], "size": "M", "qty": 1, "unit_price": 50}],
-                                                        "returned_items": [{"product_id": p["id"], "name": p["name"], "size": "G", "qty": 1, "reason": "tamanho"}]}).json()
+                                                        "returned_items": [{"product_id": p["id"], "name": p["name"], "size": "G", "qty": 1, "reason": "tamanho"}]})
+        assert t_response.status_code == 200, t_response.text
+        t = t_response.json()
         CREATED["orders"].append(t["id"])
         assert t["original_order_id"] == v["id"]
+        exchange_fulfillment = admin.post(f"{BASE_URL}/api/orders/{t['id']}/fulfill", json={"delivery_type": "RETIRADA"})
+        assert exchange_fulfillment.status_code == 200, exchange_fulfillment.text
         assert _stock(admin, p["id"], "G") == 5
         assert _stock(admin, p["id"], "M") == 4
-        d = admin.post(f"{BASE_URL}/api/orders", json={"type": "DEVOLUCAO", "status": "Entregue", "customer_name": "TEST_Cli", "avulsa": True,
-                                                        "items": [], "returned_items": [{"product_id": p["id"], "name": p["name"], "size": "M", "qty": 1}]}).json()
+        exchange_movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == t["id"]]
+        assert sorted((movement["kind"], movement["size"], movement["qty"]) for movement in exchange_movements) == [
+            ("ENTRADA", "G", 1), ("SAIDA", "M", 1),
+        ]
+        return_response = admin.post(f"{BASE_URL}/api/orders", json={"type": "DEVOLUCAO", "status": "Aprovado", "customer_name": "TEST_Cli", "avulsa": True,
+                                                        "items": [], "returned_items": [{"product_id": p["id"], "name": p["name"], "size": "M", "qty": 1}]})
+        assert return_response.status_code == 200, return_response.text
+        d = return_response.json()
         CREATED["orders"].append(d["id"])
         assert d["avulsa"] is True
+        return_fulfillment = admin.post(f"{BASE_URL}/api/orders/{d['id']}/fulfill", json={"delivery_type": "RETIRADA"})
+        assert return_fulfillment.status_code == 200, return_fulfillment.text
         assert _stock(admin, p["id"], "M") == 5
+        return_movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == d["id"]]
+        assert len(return_movements) == 1 and return_movements[0]["kind"] == "ENTRADA"
         # no commission for troca
         assert not [c for c in admin.get(f"{BASE_URL}/api/commissions").json() if c["order_id"] == t["id"]]
 

@@ -679,8 +679,7 @@ export default function Orders({ mode }) {
                 <label><div className="text-[11px] font-mono text-neutral-500">Status</div>
                   <select className="input" value={editing.status} disabled={!isAdmin && ["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
                     <option>Orçamento</option><option>Aprovado</option><option>Separado</option><option>Cancelado</option>
-                    {isAdmin && <><option>Entregue</option><option>Retirado</option></>}
-                    {!isAdmin && ["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
+                    {["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Pagamento</div>
                   <select className="input" value={editing.payment} onChange={e=>setEditing({...editing, payment:e.target.value})}>
@@ -690,6 +689,11 @@ export default function Orders({ mode }) {
                   <input type="number" step="0.01" className="input" value={editing.discount} onChange={e=>setEditing({...editing, discount:Number(e.target.value)})}/>
                 </label>
               </div>
+              {!["Entregue", "Retirado"].includes(editing.status) && (
+                <p className="text-xs text-neutral-600">
+                  A saída dos itens e a entrada das devoluções são lançadas ao concluir Entrega/Retirada pelo botão de caminhão na lista, após a conferência e assinatura.
+                </p>
+              )}
 
               <label><div className="text-[11px] font-mono text-neutral-500">Cliente</div>
                 <select className="input" value={editing.customer_id||""} onChange={e=>{
@@ -893,6 +897,20 @@ export default function Orders({ mode }) {
                           </tr>
                         </tfoot>
                       </table>
+                    </div>
+                    <div className="border-t pt-2">
+                      <h4 className="text-sm font-semibold">Itens recebidos na troca/devolução (entrada no estoque)</h4>
+                      {(fulfillment.order.returned_items || []).length > 0 ? (
+                        <ul className="mt-1 space-y-1 text-sm">
+                          {fulfillment.order.returned_items.map((item, index) => (
+                            <li key={`${item.product_id || item.name}-${item.size}-${index}`}>
+                              {item.qty}x {item.name || prodById[item.product_id]?.name || "Produto"} · {item.size || "—"}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-xs text-neutral-500">Sem itens recebidos.</p>
+                      )}
                     </div>
                     {fulfillment.order.notes && <p className="border-t pt-2 text-sm"><strong>Observações:</strong> {fulfillment.order.notes}</p>}
                   </div>

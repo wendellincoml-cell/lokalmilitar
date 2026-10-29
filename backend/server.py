@@ -1328,6 +1328,8 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         await _reverse_order_stock(oid)
         old_stock_applied = False
     if not old_stock_applied and _order_is_fulfilled(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
+        if await _has_order_stock_movements(oid):
+            await _reverse_order_stock(oid)
         await _apply_order_stock(doc)
         doc["stock_applied"] = True
     # Commissions start when a sale is approved; stock moves only on delivery or pickup.
