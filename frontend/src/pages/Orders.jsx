@@ -516,21 +516,23 @@ export default function Orders({ mode }) {
         </section>
       )}
 
-      <div className="lm-card p-3 mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm text-neutral-600" aria-live="polite">
-          {shownOrders.length} pedido(s) · {selectedVisibleOrderIds.length} selecionado(s)
-        </div>
-        <button
-          type="button"
-          className="lm-btn lm-btn-outline"
-          onClick={() => setFiltersDialogOpen(true)}
-          data-testid="open-order-tools"
-        >
-          <SlidersHorizontal size={14} /> Filtros e ações em lote
-        </button>
-      </div>
+      {!isTrocas && (
+        <>
+          <div className="lm-card p-3 mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm text-neutral-600" aria-live="polite">
+              {shownOrders.length} pedido(s) · {selectedVisibleOrderIds.length} selecionado(s)
+            </div>
+            <button
+              type="button"
+              className="lm-btn lm-btn-outline"
+              onClick={() => setFiltersDialogOpen(true)}
+              data-testid="open-order-tools"
+            >
+              <SlidersHorizontal size={14} /> Filtros e ações em lote
+            </button>
+          </div>
 
-      <Dialog open={filtersDialogOpen} onOpenChange={setFiltersDialogOpen}>
+          <Dialog open={filtersDialogOpen} onOpenChange={setFiltersDialogOpen}>
         <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] overflow-y-auto" data-testid="order-tools-dialog">
           <DialogHeader>
             <DialogTitle className="font-head">Filtros e ações em lote</DialogTitle>
@@ -608,13 +610,15 @@ export default function Orders({ mode }) {
         )}
           </section>
         </DialogContent>
-      </Dialog>
+          </Dialog>
+        </>
+      )}
 
       <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">
           <thead className="bg-neutral-100 text-[11px]">
             <tr>
-              <th className="p-2"><input
+              {!isTrocas && <th className="p-2"><input
                 type="checkbox"
                 aria-label="Selecionar todos os pedidos exibidos"
                 checked={allVisibleSelected}
@@ -624,14 +628,14 @@ export default function Orders({ mode }) {
                     : [...new Set([...current, ...shownOrders.map((order) => order.id)])]
                 ))}
                 data-testid="select-all-visible-orders"
-              /></th>
+              /></th>}
               <th>#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>Ações</th>
             </tr>
           </thead>
           <tbody>
             {shownOrders.map(o => (
               <tr key={o.id} className={`border-t hover:bg-neutral-50 ${o.status === "Separado" && separatedDateValue(o) < today ? "bg-amber-50" : ""}`}>
-                <td className="p-2"><input
+                {!isTrocas && <td className="p-2"><input
                   type="checkbox"
                   checked={selectedOrderIds.includes(o.id)}
                   onChange={() => setSelectedOrderIds((current) => current.includes(o.id)
@@ -639,7 +643,7 @@ export default function Orders({ mode }) {
                     : [...current, o.id])}
                   aria-label={`Selecionar pedido ${o.number}`}
                   data-testid={`select-order-${o.number}`}
-                /></td>
+                /></td>}
                 <td className="p-2 font-bold">{o.number}</td>
                 <td>{formatDateShort(o.created_at)}</td>
                 <td>{o.type}</td>
@@ -681,7 +685,7 @@ export default function Orders({ mode }) {
                 </td>
               </tr>
             ))}
-            {shownOrders.length===0 && (<tr><td colSpan={11} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido encontrado com esses filtros.</td></tr>)}
+            {shownOrders.length===0 && (<tr><td colSpan={isTrocas ? 10 : 11} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido encontrado com esses filtros.</td></tr>)}
           </tbody>
         </table>
       </div>
