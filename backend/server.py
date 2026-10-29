@@ -323,7 +323,7 @@ class Order(BaseModel):
     id: str = Field(default_factory=new_id)
     number: int = 0
     type: str = "VENDA"  # VENDA | TROCA | DEVOLUCAO | ORCAMENTO
-    status: str = "Orçamento"  # Orçamento | Aprovado | Separado | Entregue | Retirado | Cancelado
+    status: str = "Separado"  # Separado | Entregue | Retirado | Cancelado
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     vendor_id: Optional[str] = None
@@ -1229,6 +1229,23 @@ async def _reverse_order_stock(order_id: str):
         await db.stock_movements.delete_many({"order_id": order_id})
     await db.orders.update_one({"id": order_id}, {"$set": {"stock_applied": False}})
 
+async def _cancel_order_stock(order_id: str):
+    movements = await db.stock_movements.find({"order_id": order_id}).to_list(10000)
+    outbound_movements = [
+        movement for movement in movements if movement.get("kind") != "ENTRADA"
+    ]
+    for movement in outbound_movements:
+        await _change_stock(
+            movement["product_id"],
+            movement.get("size"),
+            -_stock_movement_delta(movement),
+        )
+    if outbound_movements:
+        await db.stock_movements.delete_many({
+            "_id": {"$in": [movement["_id"] for movement in outbound_movements]}
+        })
+    await db.orders.update_one({"id": order_id}, {"$set": {"stock_applied": False}})
+
 async def _has_order_stock_movements(order_id: str) -> bool:
     return await db.stock_movements.count_documents({"order_id": order_id}) > 0
 
@@ -1296,6 +1313,7 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     payload.pop("number", None)
     payload.pop("fulfilled_at", None)
     payload.pop("separated_at", None)
+    payload.pop("stock_applied", None)
     items = payload.get("items", old.get("items", []))
     subtotal = sum(float(it.get("qty", 1)) * float(it.get("unit_price", 0)) for it in items)
     for it in items:
@@ -1324,7 +1342,17 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     stock_fields_changed = old_stock_fields != _stock_relevant_order_fields(doc)
-    if old_stock_applied and (not _order_is_fulfilled(doc) or stock_fields_changed):
+    cancelling_order = doc.get("status") == "Cancelado"
+    if cancelling_order and (
+        old.get("status") != "Cancelado"
+        or stock_fields_changed
+        or old_stock_applied
+        or await _has_order_stock_movements(oid)
+    ):
+        await _cancel_order_stock(oid)
+        old_stock_applied = False
+        doc["stock_applied"] = False
+    elif old_stock_applied and (not _order_is_fulfilled(doc) or stock_fields_changed):
         await _reverse_order_stock(oid)
         old_stock_applied = False
     if not old_stock_applied and _order_is_fulfilled(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
@@ -1373,6 +1401,8 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
             raise HTTPException(400, "Veículo não encontrado ou inativo")
         update.update({"vehicle_id": vehicle_id, "vehicle_name": vehicle["name"]})
     signature = payload.get("signature")
+    if user.get("role") != "admin" and not signature:
+        raise HTTPException(400, "Solicite a assinatura do cliente antes de concluir o pedido")
     if signature:
         if not isinstance(signature, str) or not signature.startswith("data:image/png;base64,") or len(signature) > 1_500_000:
             raise HTTPException(400, "Assinatura inválida")

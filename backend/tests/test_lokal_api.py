@@ -194,6 +194,32 @@ class TestStock:
 
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:
+    def test_novo_pedido_inicia_separado_sem_alterar_estoque(self, admin):
+        product = _prod(admin, "TEST_Status_Separado", [{"size": "U", "stock": 4}])
+        response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Status_Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert response.status_code == 200, response.text
+        order = response.json()
+        CREATED["orders"].append(order["id"])
+        assert order["status"] == "Separado"
+        assert _stock(admin, product["id"], "U") == 4
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
+
     def test_separated_status_tracks_when_order_was_separated(self, admin):
         created = admin.post(
             f"{BASE_URL}/api/orders",
@@ -302,6 +328,62 @@ class TestOrders:
         assert repeated.status_code == 400
         assert _stock(admin, p["id"], "42") == 3
 
+    def test_usuario_nao_admin_precisa_assinatura_para_concluir(self, admin):
+        created_user = admin.post(
+            f"{BASE_URL}/api/auth/users",
+            json={
+                "email": f"test_assinatura_{uuid.uuid4().hex[:8]}@lokal.com",
+                "password": "vend123",
+                "name": "TEST_Vendedor",
+                "role": "vendedor",
+            },
+        )
+        assert created_user.status_code == 200, created_user.text
+        CREATED["users"].append(created_user.json()["id"])
+        login = requests.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": created_user.json()["email"], "password": "vend123"},
+        )
+        assert login.status_code == 200, login.text
+        vendor = requests.Session()
+        vendor.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+
+        product = _prod(admin, "TEST_Assinatura", [{"size": "U", "stock": 2}])
+        order_response = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Assinatura",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 1,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert order_response.status_code == 200, order_response.text
+        order = order_response.json()
+        CREATED["orders"].append(order["id"])
+
+        without_signature = vendor.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert without_signature.status_code == 400
+        assert _stock(admin, product["id"], "U") == 2
+
+        with_signature = vendor.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={
+                "delivery_type": "RETIRADA",
+                "signature": "data:image/png;base64,Zm9v",
+            },
+        )
+        assert with_signature.status_code == 200, with_signature.text
+        assert _stock(admin, product["id"], "U") == 1
+
     def test_entrega_por_transportadora_baixa_estoque_sem_viagem(self, admin):
         p = _prod(admin, "TEST_Casaco", [{"size": "M", "stock": 4}])
         o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
@@ -333,6 +415,91 @@ class TestOrders:
         assert reopened.status_code == 200, reopened.text
         assert _stock(admin, p["id"], "40") == 5
         assert not [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+
+    def test_cancelamento_reverte_apenas_saida_de_pedido_concluido(self, admin):
+        product = _prod(admin, "TEST_Cancelamento", [{"size": "U", "stock": 5}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Cancelamento",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+                "returned_items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 1,
+                    "reason": "TEST_devolucao",
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        assert _stock(admin, product["id"], "U") == 5
+
+        completed = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert completed.status_code == 200, completed.text
+        assert _stock(admin, product["id"], "U") == 4
+
+        cancelled = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Cancelado"},
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "Cancelado"
+        assert _stock(admin, product["id"], "U") == 6
+        movements = [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
+        assert len(movements) == 1 and movements[0]["kind"] == "ENTRADA"
+
+        repeated_cancel = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Cancelado"},
+        )
+        assert repeated_cancel.status_code == 200, repeated_cancel.text
+        assert _stock(admin, product["id"], "U") == 6
+
+        separated_order = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Cancelamento_sem_saida",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert separated_order.status_code == 200, separated_order.text
+        separated = separated_order.json()
+        CREATED["orders"].append(separated["id"])
+        cancelled_separated = admin.put(
+            f"{BASE_URL}/api/orders/{separated['id']}",
+            json={"status": "Cancelado"},
+        )
+        assert cancelled_separated.status_code == 200, cancelled_separated.text
+        assert _stock(admin, product["id"], "U") == 6
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == separated["id"]
+        ]
 
     def test_desmontagem_farda(self, admin):
         farda = _prod(admin, "TEST_FARDA CAMUFLADA", [{"size": "M", "stock": 1}])

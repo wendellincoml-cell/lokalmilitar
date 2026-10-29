@@ -13,12 +13,13 @@ import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
 
 const BLANK_ORDER = {
-  type: "VENDA", status: "Orçamento", customer_id: "", customer_name: "",
+  type: "VENDA", status: "Separado", customer_id: "", customer_name: "",
   items: [], returned_items: [], exchanged_items: [],
   discount: 0, payment: "PIX", notes: "", avulsa: false, original_order_id: "",
 };
-const ORDER_STATUSES = ["Orçamento", "Aprovado", "Separado", "Entregue", "Retirado", "Cancelado"];
-const BULK_ORDER_STATUSES = ["Orçamento", "Aprovado", "Separado", "Cancelado"];
+const ORDER_STATUSES = ["Separado", "Entregue", "Retirado", "Cancelado"];
+const EDITABLE_ORDER_STATUSES = ["Separado", "Cancelado"];
+const BULK_ORDER_STATUSES = ["Separado", "Cancelado"];
 const localDateValue = (date = new Date()) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -120,6 +121,24 @@ export default function Orders({ mode }) {
     orders,
     today,
   ]);
+  const completedOrderReturns = useMemo(() => orders.flatMap((order) => {
+    if (!isCompletedOrder(order) || !(order.returned_items || []).length) return [];
+    const fulfilledDate = localDateFromValue(order.fulfilled_at || order.created_at);
+    if (filterDateFrom && fulfilledDate < filterDateFrom) return [];
+    if (filterDateTo && fulfilledDate > filterDateTo) return [];
+    if (filterCustomer && !String(order.customer_name || "").toLocaleLowerCase().includes(filterCustomer.toLocaleLowerCase())) return [];
+    if (filterOrderNumber && !String(order.number).includes(filterOrderNumber.trim())) return [];
+    if (filterStatus && order.status !== filterStatus) return [];
+    return (order.returned_items || []).map((item, index) => ({
+      ...item,
+      order_id: order.id,
+      order_number: order.number,
+      customer_name: order.customer_name,
+      fulfilled_at: order.fulfilled_at || order.created_at,
+      status: order.status,
+      id: `${order.id}:${index}`,
+    }));
+  }), [filterCustomer, filterDateFrom, filterDateTo, filterOrderNumber, filterStatus, orders]);
   const selectedVisibleOrderIds = shownOrders
     .filter((order) => selectedOrderIds.includes(order.id))
     .map((order) => order.id);
@@ -301,10 +320,13 @@ export default function Orders({ mode }) {
   const changeSelectedOrdersStatus = async () => {
     if (!bulkStatus || selectedVisibleOrderIds.length === 0 || updatingBulkStatus) return;
     const selectedOrders = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
-    const completedOrders = selectedOrders.filter(isCompletedOrder);
-    const ordersToUpdate = selectedOrders.filter(
-      (order) => !isCompletedOrder(order) && order.status !== bulkStatus,
-    );
+    const completedOrders = bulkStatus === "Cancelado"
+      ? []
+      : selectedOrders.filter(isCompletedOrder);
+    const ordersToUpdate = selectedOrders.filter((order) => (
+      order.status !== bulkStatus
+      && (bulkStatus === "Cancelado" || !isCompletedOrder(order))
+    ));
     if (ordersToUpdate.length === 0) {
       toast.error("Selecione pedidos ainda não concluídos e um novo status");
       return;
@@ -325,7 +347,7 @@ export default function Orders({ mode }) {
     setUpdatingBulkStatus(false);
     if (updatedCount > 0) toast.success(`${updatedCount} pedido(s) atualizado(s) para ${bulkStatus}`);
     if (completedOrders.length > 0) {
-      toast.info(`${completedOrders.length} pedido(s) entregue(s)/retirado(s) ignorado(s); altere individualmente para preservar a conferência e a assinatura.`);
+      toast.info(`${completedOrders.length} pedido(s) entregue(s)/retirado(s) ignorado(s); conclua ou confira individualmente.`);
     }
     if (failures.length > 0) toast.error(`Falha ao atualizar: ${failures.join(", ")}`);
   };
@@ -356,7 +378,7 @@ export default function Orders({ mode }) {
 
   const completeOrder = () => withSubmitLock("fulfill-order", async () => {
     if (!fulfillment) return;
-    if (!fulfillment.signature) {
+    if (!isAdmin && !fulfillment.signature) {
       toast.error("Solicite a assinatura do cliente antes de concluir o pedido");
       return;
     }
@@ -379,6 +401,10 @@ export default function Orders({ mode }) {
     }
   });
   const beginSignature = async () => {
+    if (isAdmin) {
+      completeOrder();
+      return;
+    }
     setFulfillment((current) => current ? { ...current, step: "signature" } : current);
     try {
       if (!window.screen?.orientation?.lock) return;
@@ -465,6 +491,31 @@ export default function Orders({ mode }) {
         </div>
       </header>
 
+      {isTrocas && completedOrderReturns.length > 0 && (
+        <section className="lm-card p-3 mb-3" aria-label="Devoluções dentro de pedidos concluídos" data-testid="order-embedded-returns">
+          <h2 className="font-head text-sm mb-2">Trocas/devoluções registradas dentro dos pedidos</h2>
+          <div className="lm-table-wrap overflow-x-auto">
+            <table className="lm-table">
+              <thead><tr><th>Pedido</th><th>Data</th><th>Cliente</th><th>Produto devolvido</th><th>Tamanho</th><th>Qtd.</th><th>Motivo</th><th>Status</th></tr></thead>
+              <tbody>
+                {completedOrderReturns.map((item) => (
+                  <tr key={item.id}>
+                    <td>#{item.order_number}</td>
+                    <td>{formatDateShort(item.fulfilled_at)}</td>
+                    <td>{item.customer_name}</td>
+                    <td>{item.name || prodById[item.product_id]?.name || "Produto"}</td>
+                    <td>{item.size || "—"}</td>
+                    <td>{item.qty}</td>
+                    <td>{item.reason || "—"}</td>
+                    <td>{item.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       <div className="lm-card p-3 mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm text-neutral-600" aria-live="polite">
           {shownOrders.length} pedido(s) · {selectedVisibleOrderIds.length} selecionado(s)
@@ -547,7 +598,7 @@ export default function Orders({ mode }) {
             >
               <Check size={14} />{updatingBulkStatus ? "Atualizando..." : "Aplicar aos selecionados"}
             </button>
-            <span className="text-xs text-neutral-600">Entregue/Retirado exigem conferência e assinatura individual.</span>
+            <span className="text-xs text-neutral-600">Concluir Entregue/Retirado exige conferência individual dos itens.</span>
           </>
         )}
         {selectedOrderIds.length > 0 && (
@@ -606,7 +657,7 @@ export default function Orders({ mode }) {
                       aria-label={`Status do pedido #${o.number}`}
                       data-testid={`order-status-${o.number}`}
                     >
-                      {!ORDER_STATUSES.includes(o.status) && <option>{o.status}</option>}
+                      {!ORDER_STATUSES.includes(o.status) && <option disabled>{o.status}</option>}
                       {ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
                     </select>
                   ) : (
@@ -678,8 +729,9 @@ export default function Orders({ mode }) {
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Status</div>
                   <select className="input" value={editing.status} disabled={!isAdmin && ["Entregue", "Retirado"].includes(editing.status)} onChange={e=>setEditing({...editing, status:e.target.value})}>
-                    <option>Orçamento</option><option>Aprovado</option><option>Separado</option><option>Cancelado</option>
+                    {EDITABLE_ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}
                     {["Entregue", "Retirado"].includes(editing.status) && <option>{editing.status}</option>}
+                    {!EDITABLE_ORDER_STATUSES.includes(editing.status) && !["Entregue", "Retirado"].includes(editing.status) && <option disabled>{editing.status}</option>}
                   </select></label>
                 <label><div className="text-[11px] font-mono text-neutral-500">Pagamento</div>
                   <select className="input" value={editing.payment} onChange={e=>setEditing({...editing, payment:e.target.value})}>
@@ -691,7 +743,7 @@ export default function Orders({ mode }) {
               </div>
               {!["Entregue", "Retirado"].includes(editing.status) && (
                 <p className="text-xs text-neutral-600">
-                  A saída dos itens e a entrada das devoluções são lançadas ao concluir Entrega/Retirada pelo botão de caminhão na lista, após a conferência e assinatura.
+                  Separado não altera o estoque. Entregue/Retirado lança a saída dos itens e a entrada das devoluções; Cancelado devolve ao estoque somente saídas que já ocorreram.
                 </p>
               )}
 
@@ -935,7 +987,9 @@ export default function Orders({ mode }) {
                   )}
                   <div className="flex justify-end gap-2">
                     <button className="lm-btn lm-btn-outline" onClick={closeFulfillment}>Cancelar</button>
-                    <button className="lm-btn lm-btn-olive" onClick={beginSignature} data-testid="begin-order-signature">Conferido · Assinar</button>
+                    <button className="lm-btn lm-btn-olive" onClick={beginSignature} data-testid="begin-order-signature">
+                      {isAdmin ? "Conferido · Concluir sem assinatura" : "Conferido · Assinar"}
+                    </button>
                   </div>
                 </>
               ) : (
