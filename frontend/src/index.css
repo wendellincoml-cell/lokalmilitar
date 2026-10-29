@@ -213,6 +213,9 @@ h1, h2, h3 { color: var(--title-color); }
   font-family: Arial, sans-serif;
   font-size: 11px;
 }
+@media print {
+  .print-a4 + .print-a4 { break-before: page; page-break-before: always; }
+}
 .print-80 { width: 80mm; padding: 4mm; background: #fff; color: #000; font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
 .print-a4 table { width: 100%; border-collapse: collapse; }
 .print-a4 th, .print-a4 td { border: 1px solid #000; padding: 4px 6px; }

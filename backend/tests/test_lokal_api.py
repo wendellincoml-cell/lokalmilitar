@@ -194,6 +194,30 @@ class TestStock:
 
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:
+    def test_separated_status_tracks_when_order_was_separated(self, admin):
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={"customer_name": "TEST_Separado", "items": [], "status": "Aprovado"},
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        assert "separated_at" not in order
+
+        separated = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Separado"},
+        )
+        assert separated.status_code == 200, separated.text
+        assert separated.json()["separated_at"]
+
+        reopened = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Aprovado"},
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json().get("separated_at") is None
+
     def test_order_signatures_are_only_returned_by_detail_endpoint(self, admin):
         signature = "data:image/png;base64,Zm9v"
         created = admin.post(

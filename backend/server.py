@@ -1258,6 +1258,8 @@ async def create_order(payload: dict, user: dict = Depends(get_current_user)):
     payload["total"] = max(0, subtotal - discount)
     obj = Order(**payload)
     doc = obj.model_dump()
+    if doc["status"] == "Separado":
+        doc["separated_at"] = now_iso()
     if _order_is_fulfilled(doc):
         raise HTTPException(400, "Conclua o pedido pela ação Entregar/Retirar")
     await db.orders.insert_one(doc)
@@ -1282,6 +1284,7 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     payload.pop("id", None)
     payload.pop("number", None)
     payload.pop("fulfilled_at", None)
+    payload.pop("separated_at", None)
     items = payload.get("items", old.get("items", []))
     subtotal = sum(float(it.get("qty", 1)) * float(it.get("unit_price", 0)) for it in items)
     for it in items:
@@ -1298,6 +1301,11 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
             payload["fulfilled_at"] = now_iso()
     elif old.get("fulfilled_at") is not None:
         payload["fulfilled_at"] = None
+    if candidate.get("status") == "Separado":
+        if old.get("status") != "Separado":
+            payload["separated_at"] = now_iso()
+    elif old.get("separated_at") is not None:
+        payload["separated_at"] = None
     old_stock_applied = old.get("stock_applied")
     if old_stock_applied is None:
         old_stock_applied = await _has_order_stock_movements(oid)

@@ -18,6 +18,23 @@ const BLANK_ORDER = {
   discount: 0, payment: "PIX", notes: "", avulsa: false, original_order_id: "",
 };
 const ORDER_STATUSES = ["Orçamento", "Aprovado", "Separado", "Entregue", "Retirado", "Cancelado"];
+const BULK_ORDER_STATUSES = ["Orçamento", "Aprovado", "Separado", "Cancelado"];
+const localDateValue = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+const localDateFromValue = (value) => {
+  if (!value) return "";
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? raw.slice(0, 10) : localDateValue(date);
+};
+const orderDateValue = (order) => localDateFromValue(order.created_at);
+const separatedDateValue = (order) => localDateFromValue(order.separated_at || order.created_at);
+const isCompletedOrder = (order) => ["Entregue", "Retirado"].includes(order.status);
 
 export default function Orders({ mode }) {
   const { user } = useAuth();
@@ -29,6 +46,17 @@ export default function Orders({ mode }) {
   const [orders, setOrders] = useState([]);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [loadingPrintOrderId, setLoadingPrintOrderId] = useState("");
+  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [orderFilterMode, setOrderFilterMode] = useState("today_and_separated");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+  const [filterCustomer, setFilterCustomer] = useState("");
+  const [filterOrderNumber, setFilterOrderNumber] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [updatingBulkStatus, setUpdatingBulkStatus] = useState(false);
+  const [printingSelectedOrders, setPrintingSelectedOrders] = useState(false);
+  const [batchPrinting, setBatchPrinting] = useState([]);
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
@@ -65,8 +93,57 @@ export default function Orders({ mode }) {
   const prodById = useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
 
   const openNew = () => { setEditing({ ...BLANK_ORDER, ...(isTrocas ? { type: "TROCA" } : {}) }); setOpen(true); };
-  const shownOrders = orders.filter(o => isTrocas ? ["TROCA","DEVOLUCAO"].includes(o.type) : true);
+  const today = localDateValue();
+  const shownOrders = useMemo(() => orders.filter((order) => {
+    if (isTrocas && !["TROCA", "DEVOLUCAO"].includes(order.type)) return false;
+    const createdDate = orderDateValue(order);
+    if (
+      orderFilterMode === "today_and_separated"
+      && createdDate !== today
+      && order.status !== "Separado"
+    ) return false;
+    if (filterDateFrom && createdDate < filterDateFrom) return false;
+    if (filterDateTo && createdDate > filterDateTo) return false;
+    if (filterCustomer && !String(order.customer_name || "").toLocaleLowerCase().includes(filterCustomer.toLocaleLowerCase())) return false;
+    if (filterOrderNumber && !String(order.number).includes(filterOrderNumber.trim())) return false;
+    if (filterStatus && order.status !== filterStatus) return false;
+    return true;
+  }), [
+    filterCustomer,
+    filterDateFrom,
+    filterDateTo,
+    filterOrderNumber,
+    filterStatus,
+    isTrocas,
+    orderFilterMode,
+    orders,
+    today,
+  ]);
+  const selectedVisibleOrderIds = shownOrders
+    .filter((order) => selectedOrderIds.includes(order.id))
+    .map((order) => order.id);
+  const allVisibleSelected = shownOrders.length > 0 && selectedVisibleOrderIds.length === shownOrders.length;
   const openEdit = (o) => { setEditing(JSON.parse(JSON.stringify(o))); setOpen(true); };
+  useEffect(() => {
+    setSelectedOrderIds([]);
+  }, [
+    filterCustomer,
+    filterDateFrom,
+    filterDateTo,
+    filterOrderNumber,
+    filterStatus,
+    orderFilterMode,
+  ]);
+  useEffect(() => {
+    if (batchPrinting.length === 0) return undefined;
+    const clearBatch = () => setBatchPrinting([]);
+    window.addEventListener("afterprint", clearBatch);
+    const printTimer = window.setTimeout(() => window.print(), 350);
+    return () => {
+      window.clearTimeout(printTimer);
+      window.removeEventListener("afterprint", clearBatch);
+    };
+  }, [batchPrinting]);
   const startFulfillment = (order, deliveryType = "ENTREGA") => {
     setFulfillment({ order, delivery_type: deliveryType, vehicle_id: "", signature: "", step: "review" });
   };
@@ -157,7 +234,12 @@ export default function Orders({ mode }) {
       if (mode === "a4") {
         const [orderResponse, vendorResponse] = await Promise.all([
           api.get(`/orders/${order.id}`),
-          order.vendor_id ? api.get(`/vendors/${order.vendor_id}`) : Promise.resolve(null),
+          order.vendor_id
+            ? api.get(`/vendors/${order.vendor_id}`).catch((error) => {
+              if (error.response?.status === 404) return null;
+              throw error;
+            })
+            : Promise.resolve(null),
         ]);
         orderToPrint = orderResponse.data;
         vendorToPrint = vendorResponse?.data || vendorToPrint;
@@ -180,6 +262,72 @@ export default function Orders({ mode }) {
       setLoadingPrintOrderId("");
     }
   }, [orders, vendors]);
+
+  const printSelectedOrders = async () => {
+    const selectedOrders = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
+    if (selectedOrders.length === 0) return;
+    setPrintingSelectedOrders(true);
+    try {
+      const orderDetails = await Promise.all(
+        selectedOrders.map((order) => api.get(`/orders/${order.id}`).then((response) => response.data)),
+      );
+      const vendorIds = [...new Set(orderDetails.map((order) => order.vendor_id).filter(Boolean))];
+      const vendorDetails = await Promise.all(
+        vendorIds.map(async (vendorId) => {
+          try {
+            const { data: vendor } = await api.get(`/vendors/${vendorId}`);
+            return vendor;
+          } catch (error) {
+            if (error.response?.status === 404) return null;
+            throw error;
+          }
+        }),
+      );
+      const vendorsById = Object.fromEntries(vendorDetails.filter(Boolean).map((vendor) => [vendor.id, vendor]));
+      setBatchPrinting(orderDetails.map((order) => ({
+        order,
+        vendor: vendorsById[order.vendor_id] || vendors.find((vendor) => vendor.id === order.vendor_id),
+        customer: customers.find((customer) => customer.id === order.customer_id),
+      })));
+      setSelectedOrderIds([]);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível preparar a impressão dos pedidos selecionados");
+    } finally {
+      setPrintingSelectedOrders(false);
+    }
+  };
+
+  const changeSelectedOrdersStatus = async () => {
+    if (!bulkStatus || selectedVisibleOrderIds.length === 0 || updatingBulkStatus) return;
+    const selectedOrders = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
+    const completedOrders = selectedOrders.filter(isCompletedOrder);
+    const ordersToUpdate = selectedOrders.filter(
+      (order) => !isCompletedOrder(order) && order.status !== bulkStatus,
+    );
+    if (ordersToUpdate.length === 0) {
+      toast.error("Selecione pedidos ainda não concluídos e um novo status");
+      return;
+    }
+    setUpdatingBulkStatus(true);
+    const failures = [];
+    let updatedCount = 0;
+    for (const order of ordersToUpdate) {
+      try {
+        await api.put(`/orders/${order.id}`, { status: bulkStatus });
+        updatedCount += 1;
+      } catch {
+        failures.push(`#${order.number}`);
+      }
+    }
+    await load();
+    setSelectedOrderIds([]);
+    setUpdatingBulkStatus(false);
+    if (updatedCount > 0) toast.success(`${updatedCount} pedido(s) atualizado(s) para ${bulkStatus}`);
+    if (completedOrders.length > 0) {
+      toast.info(`${completedOrders.length} pedido(s) entregue(s)/retirado(s) ignorado(s); altere individualmente para preservar a conferência e a assinatura.`);
+    }
+    if (failures.length > 0) toast.error(`Falha ao atualizar: ${failures.join(", ")}`);
+  };
   useEffect(() => {
     if (!autoPrintOrderId || !ordersLoaded || autoPrintStarted.current) return;
     const order = orders.find((item) => item.id === autoPrintOrderId);
@@ -316,14 +464,109 @@ export default function Orders({ mode }) {
         </div>
       </header>
 
+      <section className="lm-card p-3 mb-3 space-y-3" aria-label="Filtros de pedidos" data-testid="order-filters">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+          <label className="text-xs">Visualização
+            <select className="input mt-1" value={orderFilterMode} onChange={(event) => setOrderFilterMode(event.target.value)} data-testid="order-filter-mode">
+              <option value="today_and_separated">Hoje + separados de outros dias</option>
+              <option value="all">Todos os pedidos</option>
+            </select>
+          </label>
+          <label className="text-xs">Data inicial
+            <input type="date" className="input mt-1" value={filterDateFrom} onChange={(event) => setFilterDateFrom(event.target.value)} data-testid="order-filter-date-from" />
+          </label>
+          <label className="text-xs">Data final
+            <input type="date" className="input mt-1" value={filterDateTo} onChange={(event) => setFilterDateTo(event.target.value)} data-testid="order-filter-date-to" />
+          </label>
+          <label className="text-xs">Cliente
+            <input className="input mt-1" placeholder="Buscar cliente" value={filterCustomer} onChange={(event) => setFilterCustomer(event.target.value)} data-testid="order-filter-customer" />
+          </label>
+          <label className="text-xs">Número do pedido
+            <input type="search" inputMode="numeric" className="input mt-1" placeholder="Ex.: 123" value={filterOrderNumber} onChange={(event) => setFilterOrderNumber(event.target.value.replace(/\D/g, ""))} data-testid="order-filter-number" />
+          </label>
+          <label className="text-xs">Status
+            <select className="input mt-1" value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} data-testid="order-filter-status">
+              <option value="">Todos os status</option>
+              {ORDER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="text-xs text-neutral-600" aria-live="polite">
+          {orderFilterMode === "today_and_separated" && !filterDateFrom && !filterDateTo
+            ? "Exibindo pedidos de hoje e pedidos separados, inclusive de dias anteriores."
+            : `Exibindo ${shownOrders.length} pedido(s) com os filtros selecionados.`}
+        </div>
+      </section>
+
+      <section className="lm-card p-3 mb-3 flex flex-wrap items-center gap-2" aria-label="Ações em lote" data-testid="bulk-order-actions">
+        <span className="text-sm font-semibold">{selectedVisibleOrderIds.length} selecionado(s)</span>
+        <button
+          type="button"
+          className="lm-btn lm-btn-outline"
+          onClick={printSelectedOrders}
+          disabled={selectedVisibleOrderIds.length === 0 || printingSelectedOrders}
+          data-testid="print-selected-orders"
+        >
+          <Printer size={14} />{printingSelectedOrders ? "Preparando..." : "Imprimir selecionados (A4)"}
+        </button>
+        {isAdmin && (
+          <>
+            <label className="text-xs">
+              Alterar status para
+              <select className="input mt-1 min-w-40" value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)} data-testid="bulk-order-status">
+                <option value="">Selecione...</option>
+                {BULK_ORDER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="lm-btn lm-btn-olive"
+              onClick={changeSelectedOrdersStatus}
+              disabled={selectedVisibleOrderIds.length === 0 || !bulkStatus || updatingBulkStatus}
+              data-testid="apply-bulk-order-status"
+            >
+              <Check size={14} />{updatingBulkStatus ? "Atualizando..." : "Aplicar aos selecionados"}
+            </button>
+            <span className="text-xs text-neutral-600">Entregue/Retirado exigem conferência e assinatura individual.</span>
+          </>
+        )}
+        {selectedOrderIds.length > 0 && (
+          <button type="button" className="text-xs underline" onClick={() => setSelectedOrderIds([])} data-testid="clear-order-selection">
+            Limpar seleção
+          </button>
+        )}
+      </section>
+
       <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">
           <thead className="bg-neutral-100 text-[11px]">
-            <tr><th className="p-2">#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>Ações</th></tr>
+            <tr>
+              <th className="p-2"><input
+                type="checkbox"
+                aria-label="Selecionar todos os pedidos exibidos"
+                checked={allVisibleSelected}
+                onChange={() => setSelectedOrderIds((current) => (
+                  allVisibleSelected
+                    ? current.filter((id) => !shownOrders.some((order) => order.id === id))
+                    : [...new Set([...current, ...shownOrders.map((order) => order.id)])]
+                ))}
+                data-testid="select-all-visible-orders"
+              /></th>
+              <th>#</th><th>Data</th><th>Tipo</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Total</th><th>Pgto</th><th>Status</th><th>Ações</th>
+            </tr>
           </thead>
           <tbody>
             {shownOrders.map(o => (
-              <tr key={o.id} className="border-t hover:bg-neutral-50">
+              <tr key={o.id} className={`border-t hover:bg-neutral-50 ${o.status === "Separado" && separatedDateValue(o) < today ? "bg-amber-50" : ""}`}>
+                <td className="p-2"><input
+                  type="checkbox"
+                  checked={selectedOrderIds.includes(o.id)}
+                  onChange={() => setSelectedOrderIds((current) => current.includes(o.id)
+                    ? current.filter((id) => id !== o.id)
+                    : [...current, o.id])}
+                  aria-label={`Selecionar pedido ${o.number}`}
+                  data-testid={`select-order-${o.number}`}
+                /></td>
                 <td className="p-2 font-bold">{o.number}</td>
                 <td>{formatDateShort(o.created_at)}</td>
                 <td>{o.type}</td>
@@ -347,6 +590,11 @@ export default function Orders({ mode }) {
                   ) : (
                     <span className="text-[10px] px-2 py-0.5 bg-neutral-200">{o.status}</span>
                   )}
+                  {o.status === "Separado" && separatedDateValue(o) < today && (
+                    <span className="mt-1 block rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-950" title="Pedido separado em um dia anterior">
+                      ⚠ Separado de dia anterior
+                    </span>
+                  )}
                 </td>
                 <td className="flex gap-1 py-2 flex-wrap">
                   <button className="p-1 hover:bg-neutral-200" onClick={()=>openEdit(o)} data-testid={`edit-order-${o.number}`}><Edit size={13}/></button>
@@ -360,13 +608,16 @@ export default function Orders({ mode }) {
                 </td>
               </tr>
             ))}
-            {shownOrders.length===0 && (<tr><td colSpan={10} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido ainda.</td></tr>)}
+            {shownOrders.length===0 && (<tr><td colSpan={11} className="p-6 text-center text-neutral-500 text-xs">Nenhum pedido encontrado com esses filtros.</td></tr>)}
           </tbody>
         </table>
       </div>
 
       {/* Hidden print area */}
       <div id="print-area" style={{ position:"absolute", left:"-9999px", top:0 }}>
+        {batchPrinting.map(({ order, vendor, customer }) => (
+          <PrintOrderA4 key={order.id} order={order} settings={settings} customer={customer} vendor={vendor} />
+        ))}
         {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={printingVendor}/>}
         {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
       </div>
