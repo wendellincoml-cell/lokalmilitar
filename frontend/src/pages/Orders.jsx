@@ -242,10 +242,6 @@ export default function Orders({ mode }) {
 
   const changeOrderStatus = async (order, status) => {
     if (status === order.status) return;
-    if (!["Entregue", "Retirado"].includes(order.status) && ["Entregue", "Retirado"].includes(status)) {
-      startFulfillment(order, status === "Retirado" ? "RETIRADA" : "ENTREGA");
-      return;
-    }
     try {
       await api.put(`/orders/${order.id}`, { status });
       toast.success(`Status do pedido #${order.number} atualizado`);
