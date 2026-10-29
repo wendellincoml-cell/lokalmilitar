@@ -1466,6 +1466,39 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
 async def update_order(oid: str, payload: dict, user: dict = Depends(get_current_user)):
     return await _update_order(oid, payload, user)
 
+@api.post("/orders/{oid}/repair-stock")
+async def repair_order_stock(oid: str, user: dict = Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Somente administradores podem corrigir baixas de estoque")
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if not _order_is_fulfilled(order) or order.get("type") not in ("VENDA", "TROCA", "DEVOLUCAO"):
+        raise HTTPException(400, "Somente pedidos concluídos podem ter a baixa corrigida")
+
+    movements_match = await _order_stock_movements_match(order)
+    if movements_match:
+        if order.get("stock_applied") is not True:
+            await db.orders.update_one(
+                {"id": oid, "stock_applied": order.get("stock_applied")},
+                {"$set": {"stock_applied": True}, "$unset": {"stock_application_started_at": ""}},
+            )
+        return await db.orders.find_one({"id": oid}, {"_id": 0})
+
+    await _validate_order_stock(order)
+    if order.get("stock_applied") is True:
+        await _reset_incomplete_stock_application(order)
+    if not await _claim_order_stock_application(oid):
+        raise HTTPException(409, "O estoque deste pedido está sendo atualizado; tente novamente")
+    try:
+        if await _has_order_stock_movements(oid):
+            await _reverse_order_stock(oid, mark_unapplied=False)
+        await _apply_order_stock(order)
+    except Exception:
+        await _release_order_stock_claim(oid)
+        raise
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
+
 @api.post("/orders/{oid}/fulfill")
 async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_current_user)):
     order = await db.orders.find_one({"id": oid}, {"_id": 0})

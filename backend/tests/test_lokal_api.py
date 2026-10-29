@@ -386,10 +386,7 @@ class TestOrders:
                 "created_at": "2025-01-01T00:00:00+00:00",
             })
 
-        retried = admin.put(
-            f"{BASE_URL}/api/orders/{order['id']}",
-            json={"status": "Entregue"},
-        )
+        retried = admin.post(f"{BASE_URL}/api/orders/{order['id']}/repair-stock")
         assert retried.status_code == 200, retried.text
         assert retried.json()["stock_applied"] is True
         assert _stock(admin, product["id"], "U") == 3

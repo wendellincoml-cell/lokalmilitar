@@ -76,7 +76,7 @@ export default function Stock() {
     if (!order) return toast.error("Pedido não encontrado. Atualize a tela e tente novamente.");
     setRepairingOrders((current) => new Set(current).add(orderId));
     try {
-      await api.put(`/orders/${orderId}`, { status: order.status });
+      await api.post(`/orders/${orderId}/repair-stock`);
       toast.success(`Baixa do pedido #${order.number} conferida e corrigida`);
       await load();
     } catch (error) {
