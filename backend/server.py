@@ -931,7 +931,7 @@ async def delete_product(pid: str, user: dict = Depends(get_current_user)):
 
 async def _change_stock(product_id: str, size: Optional[str], delta: float):
     """Adjust product size stock by delta (positive=add, negative=subtract)."""
-    size_key = size or "-"
+    size_key = size if size is not None else "-"
     result = await db.products.update_one(
         {"id": product_id, "sizes.size": size_key},
         {"$inc": {"sizes.$.stock": delta}},
@@ -951,7 +951,9 @@ async def _change_stock(product_id: str, size: Optional[str], delta: float):
         {"id": product_id, "sizes.size": size_key},
         {"$inc": {"sizes.$.stock": delta}},
     )
-    return result.matched_count > 0
+    if result.matched_count:
+        return True
+    raise HTTPException(409, f"Não foi possível atualizar o estoque do produto {product_id}")
 
 async def _stock_of(product_id: str, size: Optional[str]) -> float:
     p = await db.products.find_one({"id": product_id})

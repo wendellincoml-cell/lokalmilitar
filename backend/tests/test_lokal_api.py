@@ -305,6 +305,41 @@ class TestOrders:
         assert len(order_movements) == 1
         assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
 
+    def test_fulfillment_decrements_product_with_empty_size(self, admin):
+        product = _prod(admin, "TEST_Baixa_Tamanho_Vazio", [{"size": "", "stock": 4}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Baixa_Tamanho_Vazio",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+
+        completed = admin.post(
+            f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+            json={"delivery_type": "RETIRADA"},
+        )
+        assert completed.status_code == 200, completed.text
+        product_after = next(
+            item for item in admin.get(f"{BASE_URL}/api/products").json()
+            if item["id"] == product["id"]
+        )
+        assert product_after["sizes"] == [{"size": "", "stock": 2, "stock_min": 0}]
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        order_movements = [movement for movement in movements if movement.get("order_id") == order["id"]]
+        assert len(order_movements) == 1
+        assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
+
     def test_completed_order_marked_applied_without_movements_is_repaired(self, admin):
         from pymongo import MongoClient
 
