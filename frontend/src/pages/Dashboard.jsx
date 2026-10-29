@@ -58,14 +58,6 @@ const printDayClosure = (report) => {
   const stockRows = report.stock_movements.map((movement) => [
     movement.kind, movement.product_name, movement.size, movement.qty, movement.nf || movement.reason || "",
   ]);
-  const reconciliationRows = report.stock_reconciliation.map((movement) => [
-    `#${movement.order_number}`,
-    movement.kind === "SAIDA" ? "Saída" : "Devolução",
-    movement.product_name,
-    movement.size || "",
-    movement.expected_qty,
-    movement.recorded_qty,
-  ]);
   const expenseRows = report.expenses.map((expense) => [
     expense.type, expense.description, expense.km ?? "", expense.odometer_km ?? "",
     formatBRL(Number(expense.amount || 0) + Number(expense.fuel_cost || 0) + Number(expense.toll_cost || 0)),
@@ -77,7 +69,6 @@ const printDayClosure = (report) => {
     <p>Registrado em ${escapeHtml(new Date(report.closed_at).toLocaleString("pt-BR"))} por ${escapeHtml(report.closed_by)}</p>
     <div class="summary"><div>Pedidos: ${report.summary.orders_count} · ${formatBRL(report.summary.orders_total)}</div><div>Movimentações de estoque: ${report.summary.stock_movements_count}</div><div>Despesas: ${report.summary.expenses_count} · ${formatBRL(report.summary.expenses_total)}</div></div>
     <h2>Pedidos, vendas, trocas e devoluções</h2>${table(["Pedido", "Tipo", "Cliente", "Status", "Total"], orderRows)}
-    ${reconciliationRows.length ? `<h2>Divergências nas movimentações de pedidos</h2>${table(["Pedido", "Tipo", "Produto", "Tamanho", "Esperado", "Registrado"], reconciliationRows)}` : ""}
     <h2>Movimentações de estoque</h2>${table(["Tipo", "Produto", "Tamanho", "Qtd.", "NF / Motivo"], stockRows)}
     <h2>Despesas, insumos e viagens</h2>${table(["Tipo", "Descrição", "KM", "KM no painel", "Valor"], expenseRows)}
     </body></html>`);
@@ -89,7 +80,7 @@ const printDayClosure = (report) => {
 export default function Dashboard() {
   const { run: withSubmitLock } = useSubmitLock();
   const nav = useNavigate();
-  const { dashboardPreferences, user } = useAuth();
+  const { dashboardPreferences, user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
   const [data, setData] = useState(null);
   const [cats, setCats] = useState([]);
@@ -166,6 +157,8 @@ export default function Dashboard() {
       const { data: report } = await api.post("/dashboard/close-day", payload);
       setCloseDayDialogOpen(false);
       setClosureReport(report);
+      toast.success("Fechamento concluído. As sessões serão encerradas em todos os dispositivos.");
+      window.setTimeout(logout, 8000);
     } catch (closeError) {
       toast.error(closeError.response?.data?.detail || "Não foi possível finalizar o dia");
     } finally {
@@ -303,6 +296,11 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+      {isAdmin && (
+        <p className="text-xs text-neutral-600">
+          Fechamento automático às 19h; mantenha uma sessão de administrador aberta. Ative as notificações no menu para receber o aviso das 18h50.
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {displayOrder.filter((id) => visibility[id] !== false).map(renderItem)}
       </div>
@@ -442,18 +440,6 @@ export default function Dashboard() {
               </section>
               <section>
                 <h3 className="font-head mb-2">Movimentações de estoque</h3>
-                {closureReport.stock_reconciliation.length > 0 && (
-                  <div className="border border-red-300 bg-red-50 text-red-900 rounded p-3 mb-3" role="alert" data-testid="stock-reconciliation-warning">
-                    <h4 className="font-semibold">Divergências entre pedidos concluídos e movimentos registrados</h4>
-                    <p className="text-sm mb-2">Confira estas linhas antes de considerar o fechamento conciliado. O relatório não altera o estoque automaticamente.</p>
-                    <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
-                      <thead><tr><th>Pedido</th><th>Tipo</th><th>Produto</th><th>Tamanho</th><th>Esperado</th><th>Registrado</th></tr></thead>
-                      <tbody>{closureReport.stock_reconciliation.map((item) => <tr key={`${item.order_id}:${item.kind}:${item.product_name}:${item.size}`}>
-                        <td>#{item.order_number}</td><td>{item.kind === "SAIDA" ? "Saída" : "Devolução"}</td><td>{item.product_name}</td><td>{item.size || "—"}</td><td>{item.expected_qty}</td><td>{item.recorded_qty}</td>
-                      </tr>)}</tbody>
-                    </table></div>
-                  </div>
-                )}
                 <div className="lm-table-wrap overflow-x-auto"><table className="lm-table">
                   <thead><tr><th>Tipo</th><th>Produto</th><th>Tamanho</th><th>Qtd.</th><th>NF / Motivo</th></tr></thead>
                   <tbody>{closureReport.stock_movements.map((movement) => <tr key={movement.id}><td>{movement.kind}</td><td>{movement.product_name}</td><td>{movement.size}</td><td>{movement.qty}</td><td>{movement.nf || movement.reason}</td></tr>)}

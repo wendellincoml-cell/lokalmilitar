@@ -97,13 +97,15 @@ def verify_pw(password: str, password_hash: str) -> bool:
     except ValueError:
         return False
 
-def create_token(user_id: str, email: str, role: str) -> str:
+def create_token(user_id: str, email: str, role: str, auth_epoch: Optional[str] = None) -> str:
     payload = {
         "sub": user_id,
         "email": email,
         "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(days=7),
     }
+    if auth_epoch:
+        payload["auth_epoch"] = auth_epoch
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 async def get_current_user(
@@ -125,6 +127,9 @@ async def get_current_user(
         raise HTTPException(401, "Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid token")
+    auth_state = await db.auth_state.find_one({"_id": "global"})
+    if auth_state and payload.get("auth_epoch") != auth_state.get("epoch"):
+        raise HTTPException(401, "Session expired")
     user = await db.users.find_one(
         {"id": payload["sub"]}, {"_id": 0, "password_hash": 0}
     )
@@ -558,7 +563,13 @@ async def login(payload: LoginIn):
     user = await db.users.find_one({"email": payload.email.lower()})
     if not user or not verify_pw(payload.password, user.get("password_hash", "")):
         raise HTTPException(401, "Credenciais inválidas")
-    token = create_token(user["id"], user["email"], user.get("role", "vendedor"))
+    auth_state = await db.auth_state.find_one({"_id": "global"})
+    token = create_token(
+        user["id"],
+        user["email"],
+        user.get("role", "vendedor"),
+        auth_state.get("epoch") if auth_state else None,
+    )
     user.pop("_id", None)
     user.pop("password_hash", None)
     return {"access_token": token, "token_type": "bearer", "user": user}
@@ -1612,66 +1623,6 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
             or order.get("id") in related_order_ids
         )
     ]
-    expected_movements = {}
-    day_orders_by_id = {order["id"]: order for order in day_orders}
-    for order in day_orders:
-        if (
-            not _order_is_fulfilled(order)
-            or order.get("type") not in ("VENDA", "TROCA", "DEVOLUCAO")
-        ):
-            continue
-        for field, kind in (("items", "SAIDA"), ("returned_items", "ENTRADA")):
-            for item in order.get(field) or []:
-                key = (order["id"], item.get("product_id"), item.get("size"), kind)
-                expected_movements.setdefault(key, {
-                    "order_number": order.get("number"),
-                    "product_name": item.get("name") or item.get("product_name") or "Produto",
-                    "size": item.get("size"),
-                    "kind": kind,
-                    "expected_qty": 0.0,
-                })
-                expected_movements[key]["expected_qty"] += abs(float(item.get("qty") or 0))
-
-    recorded_movements = {}
-    recorded_product_names = {}
-    for movement in day_movements:
-        if movement.get("kind") not in ("SAIDA", "ENTRADA") or not movement.get("order_id"):
-            continue
-        key = (
-            movement["order_id"],
-            movement.get("product_id"),
-            movement.get("size"),
-            movement["kind"],
-        )
-        recorded_movements[key] = recorded_movements.get(key, 0.0) + abs(
-            float(movement.get("qty") or 0)
-        )
-        recorded_product_names.setdefault(key, movement.get("product_name"))
-
-    stock_reconciliation = []
-    for key in expected_movements.keys() | recorded_movements.keys():
-        expected = expected_movements.get(key)
-        expected_qty = expected["expected_qty"] if expected else 0.0
-        recorded_qty = recorded_movements.get(key, 0.0)
-        if math.isclose(expected_qty, recorded_qty):
-            continue
-        order_id, _, size, kind = key
-        order = day_orders_by_id.get(order_id, {})
-        stock_reconciliation.append({
-            "order_id": order_id,
-            "order_number": (expected or {}).get("order_number", order.get("number")),
-            "product_name": (expected or {}).get("product_name")
-            or recorded_product_names.get(key)
-            or "Produto",
-            "size": size,
-            "kind": kind,
-            "expected_qty": expected_qty,
-            "recorded_qty": recorded_qty,
-            "difference_qty": expected_qty - recorded_qty,
-        })
-    stock_reconciliation.sort(
-        key=lambda item: (item.get("order_number") or 0, item["product_name"], item["size"] or "")
-    )
     return {
         "id": (existing or {}).get("id") or new_id(),
         "date": day,
@@ -1693,7 +1644,6 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
                 for movement in day_movements
                 if movement.get("kind") == "ENTRADA" and movement.get("order_id")
             ),
-            "stock_reconciliation_count": len(stock_reconciliation),
             "expenses_count": len(day_expenses),
             "expenses_total": sum(
                 float(expense.get("amount") or 0)
@@ -1704,7 +1654,6 @@ async def _build_day_closure(day: str, user: dict, existing: Optional[dict] = No
         },
         "orders": day_orders,
         "stock_movements": day_movements,
-        "stock_reconciliation": stock_reconciliation,
         "expenses": day_expenses,
     }
 
@@ -1768,9 +1717,8 @@ async def get_day_closure(day: str, user: dict = Depends(require_admin)):
         "summary": refreshed["summary"],
         "orders": refreshed["orders"],
         "stock_movements": refreshed["stock_movements"],
-        "stock_reconciliation": refreshed["stock_reconciliation"],
         "expenses": refreshed["expenses"],
-    }})
+    }, "$unset": {"stock_reconciliation": ""}})
     return refreshed
 
 @api.get("/dashboard/backups")
@@ -1956,9 +1904,8 @@ async def close_dashboard_day(
             "summary": report["summary"],
             "orders": report["orders"],
             "stock_movements": report["stock_movements"],
-            "stock_reconciliation": report["stock_reconciliation"],
             "expenses": report["expenses"],
-        }})
+        }, "$unset": {"stock_reconciliation": ""}})
     else:
         try:
             await db.day_closures.insert_one(report.copy())
@@ -1975,6 +1922,18 @@ async def close_dashboard_day(
         await db.day_closures.update_one(
             {"date": day}, {"$set": {"backup_id": backup["id"]}}
         )
+    await db.day_closures.update_one(
+        {"date": day, "logout_epoch": {"$exists": False}},
+        {"$set": {"logout_epoch": new_id()}},
+    )
+    closure = await db.day_closures.find_one({"date": day}, {"_id": 0, "logout_epoch": 1})
+    if closure and closure.get("logout_epoch"):
+        await db.auth_state.update_one(
+            {"_id": "global"},
+            {"$set": {"epoch": closure["logout_epoch"], "updated_at": now_iso()}},
+            upsert=True,
+        )
+        report["global_logout_done"] = True
     return report
 
 @api.get("/dashboard")

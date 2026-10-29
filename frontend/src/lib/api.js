@@ -26,6 +26,9 @@ api.interceptors.response.use(undefined, (error) => {
   if (error.response?.status === 401) {
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
+    localStorage.removeItem("lokal_user");
+    sessionStorage.removeItem("lokal_user");
+    sessionStorage.removeItem("lokal_public_access");
     if (window.location.pathname !== "/login") window.location.href = "/login";
   }
   return Promise.reject(error);

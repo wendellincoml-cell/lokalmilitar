@@ -7,7 +7,9 @@ O frontend é publicado na Vercel, a API FastAPI no Render e o banco no MongoDB 
 
 A API comprime respostas HTTP maiores com gzip e carrega assinaturas de pedidos e vendedores somente quando necessárias, reduzindo tráfego e o tempo de carregamento das listas. O dashboard também reutiliza as categorias obtidas pela própria API. O consumo e o desempenho ainda dependem do volume de uso e dos arquivos enviados.
 
-O fechamento do dia compara os itens de pedidos concluídos com as saídas e devoluções registradas no estoque, exibindo divergências por pedido, produto e quantidade. Essa conferência não altera o estoque automaticamente; diferenças históricas devem ser verificadas antes de qualquer ajuste manual.
+Ao concluir pedidos como **Entregue** ou **Retirado**, o sistema registra as saídas dos itens e as entradas dos itens em `returned_items`. O fechamento apresenta essas movimentações e cria um backup; não há mais uma tela de divergências.
+
+O fechamento automático às 19h (horário de Brasília) e o aviso às 18h50 são executados pelo navegador enquanto uma sessão de administrador estiver aberta. O aviso dentro do sistema funciona nessa condição; a notificação do navegador também exige permissão concedida. Sem um navegador aberto, o fechamento automático não será executado. Um Render Cron poderia garantir a execução em segundo plano, mas não está incluído para evitar o custo mensal adicional desse serviço. Após o fechamento, os tokens existentes são invalidados em todos os dispositivos.
 
 ### 1. Criar o banco no MongoDB Atlas
 

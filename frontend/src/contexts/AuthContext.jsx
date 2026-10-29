@@ -181,7 +181,7 @@ export function AuthProvider({ children }) {
     return data.user;
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_token");
     sessionStorage.removeItem("lokal_public_access");
@@ -189,7 +189,7 @@ export function AuthProvider({ children }) {
     sessionStorage.removeItem("lokal_user");
     setUser(null);
     window.location.href = "/login";
-  };
+  }, []);
 
   const enterPublicAccess = () => {
     if (!publicAccess) return;

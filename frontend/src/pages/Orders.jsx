@@ -4,7 +4,7 @@ import html2canvas from "html2canvas";
 import { api, formatBRL, formatDateShort } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download } from "lucide-react";
+import { Plus, Edit, Trash2, Printer, FileText, Truck, Check, Download, SlidersHorizontal } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PrintOrderA4, { PrintOrder80mm } from "@/components/PrintOrder";
@@ -54,6 +54,7 @@ export default function Orders({ mode }) {
   const [filterOrderNumber, setFilterOrderNumber] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
+  const [filtersDialogOpen, setFiltersDialogOpen] = useState(false);
   const [updatingBulkStatus, setUpdatingBulkStatus] = useState(false);
   const [printingSelectedOrders, setPrintingSelectedOrders] = useState(false);
   const [batchPrinting, setBatchPrinting] = useState([]);
@@ -464,7 +465,26 @@ export default function Orders({ mode }) {
         </div>
       </header>
 
-      <section className="lm-card p-3 mb-3 space-y-3" aria-label="Filtros de pedidos" data-testid="order-filters">
+      <div className="lm-card p-3 mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm text-neutral-600" aria-live="polite">
+          {shownOrders.length} pedido(s) · {selectedVisibleOrderIds.length} selecionado(s)
+        </div>
+        <button
+          type="button"
+          className="lm-btn lm-btn-outline"
+          onClick={() => setFiltersDialogOpen(true)}
+          data-testid="open-order-tools"
+        >
+          <SlidersHorizontal size={14} /> Filtros e ações em lote
+        </button>
+      </div>
+
+      <Dialog open={filtersDialogOpen} onOpenChange={setFiltersDialogOpen}>
+        <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] overflow-y-auto" data-testid="order-tools-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-head">Filtros e ações em lote</DialogTitle>
+          </DialogHeader>
+          <section className="lm-card p-3 space-y-3" aria-label="Filtros de pedidos" data-testid="order-filters">
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
           <label className="text-xs">Visualização
             <select className="input mt-1" value={orderFilterMode} onChange={(event) => setOrderFilterMode(event.target.value)} data-testid="order-filter-mode">
@@ -496,9 +516,9 @@ export default function Orders({ mode }) {
             ? "Exibindo pedidos de hoje e pedidos separados, inclusive de dias anteriores."
             : `Exibindo ${shownOrders.length} pedido(s) com os filtros selecionados.`}
         </div>
-      </section>
+          </section>
 
-      <section className="lm-card p-3 mb-3 flex flex-wrap items-center gap-2" aria-label="Ações em lote" data-testid="bulk-order-actions">
+          <section className="lm-card p-3 flex flex-wrap items-center gap-2" aria-label="Ações em lote" data-testid="bulk-order-actions">
         <span className="text-sm font-semibold">{selectedVisibleOrderIds.length} selecionado(s)</span>
         <button
           type="button"
@@ -535,7 +555,9 @@ export default function Orders({ mode }) {
             Limpar seleção
           </button>
         )}
-      </section>
+          </section>
+        </DialogContent>
+      </Dialog>
 
       <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">

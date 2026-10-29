@@ -550,6 +550,31 @@ def test_day_close_is_saved_and_idempotent(admin):
     )
     assert fulfilled.status_code == 200, fulfilled.text
     assert fulfilled.json()["fulfilled_at"]
+    order_movements = [
+        movement
+        for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+        if movement.get("order_id") == order["id"]
+    ]
+    assert sum(
+        float(movement["qty"])
+        for movement in order_movements
+        if movement["kind"] == "ENTRADA"
+    ) == 5
+    assert sum(
+        float(movement["qty"])
+        for movement in order_movements
+        if movement["kind"] == "SAIDA"
+    ) == 23
+    repeated_fulfillment = admin.post(
+        f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+        json={"delivery_type": "RETIRADA"},
+    )
+    assert repeated_fulfillment.status_code == 400
+    assert len([
+        movement
+        for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+        if movement.get("order_id") == order["id"]
+    ]) == len(order_movements)
 
     vehicle_response = admin.post(
         f"{BASE_URL}/api/vehicles",
@@ -575,8 +600,12 @@ def test_day_close_is_saved_and_idempotent(admin):
     assert {"orders_count", "orders_total", "stock_movements_count", "expenses_count", "expenses_total"} <= report["summary"].keys()
     assert report["summary"]["stock_out_quantity"] >= 23
     assert report["summary"]["stock_return_quantity"] >= 5
-    assert report["summary"]["stock_reconciliation_count"] == 0
-    assert report["stock_reconciliation"] == []
+    assert "stock_reconciliation" not in report
+    assert report["global_logout_done"] is True
+    assert any(
+        movement.get("order_id") == order["id"] and movement["kind"] == "ENTRADA"
+        for movement in report["stock_movements"]
+    )
     assert any(item["id"] == order["id"] for item in report["orders"])
     mileage_trip = next(
         expense for expense in report["expenses"]
