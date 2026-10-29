@@ -38,9 +38,14 @@ function VendorsPanel({ vendors, reload }) {
       toast.error(error.response?.data?.detail || "Não foi possível salvar o vendedor");
     }
   });
-  const edit = (vendor) => {
-    setEditingId(vendor.id);
-    setForm({ name: vendor.name || "", phone: vendor.phone || "", cpf: vendor.cpf || "", signature: vendor.signature || "" });
+  const edit = async (vendor) => {
+    try {
+      const { data } = await api.get(`/vendors/${vendor.id}`);
+      setEditingId(data.id);
+      setForm({ name: data.name || "", phone: data.phone || "", cpf: data.cpf || "", signature: data.signature || "" });
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível carregar os dados do vendedor");
+    }
   };
   const cancelEdit = () => { setEditingId(""); setForm(emptyVendor); };
   const del = async (id) => {

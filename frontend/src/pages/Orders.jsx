@@ -28,6 +28,7 @@ export default function Orders({ mode }) {
   const autoPrintStarted = useRef(false);
   const [orders, setOrders] = useState([]);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [loadingPrintOrderId, setLoadingPrintOrderId] = useState("");
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
@@ -36,6 +37,7 @@ export default function Orders({ mode }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [printing, setPrinting] = useState(null);
+  const [printingVendor, setPrintingVendor] = useState(null);
   const [printMode, setPrintMode] = useState("a4"); // a4 | 80
   const [reportOpen, setReportOpen] = useState(false);
   const [reportFilter, setReportFilter] = useState({ from: "", to: "", type: "ALL" });
@@ -147,16 +149,37 @@ export default function Orders({ mode }) {
     }
   };
 
-  const doPrint = useCallback((order, mode) => {
-    const linked = orders.filter(o => o.original_order_id === order.id);
-    const merged = {
-      ...order,
-      returned_items: [...(order.returned_items||[]), ...linked.flatMap(l => (l.returned_items||[]).map(r => ({ ...r, reason: `${r.reason||""} (#${l.number})` })))],
-      exchanged_items: [...(order.exchanged_items||[]), ...linked.filter(l => l.type==="TROCA").flatMap(l => (l.items||[]).map(r => ({ ...r, reason: `Item entregue na troca #${l.number}` })))],
-    };
-    const original = orders.find(o => o.id === order.original_order_id);
-    setPrinting({ ...merged, original_number: original?.number }); setPrintMode(mode);
-  }, [orders]);
+  const doPrint = useCallback(async (order, mode) => {
+    setLoadingPrintOrderId(order.id);
+    try {
+      let orderToPrint = order;
+      let vendorToPrint = vendors.find((vendor) => vendor.id === order.vendor_id) || null;
+      if (mode === "a4") {
+        const [orderResponse, vendorResponse] = await Promise.all([
+          api.get(`/orders/${order.id}`),
+          order.vendor_id ? api.get(`/vendors/${order.vendor_id}`) : Promise.resolve(null),
+        ]);
+        orderToPrint = orderResponse.data;
+        vendorToPrint = vendorResponse?.data || vendorToPrint;
+      }
+      const linked = orders.filter((item) => item.original_order_id === order.id);
+      const merged = {
+        ...orderToPrint,
+        returned_items: [...(orderToPrint.returned_items || []), ...linked.flatMap((item) => (item.returned_items || []).map((returnedItem) => ({ ...returnedItem, reason: `${returnedItem.reason || ""} (#${item.number})` })))],
+        exchanged_items: [...(orderToPrint.exchanged_items || []), ...linked.filter((item) => item.type === "TROCA").flatMap((item) => (item.items || []).map((exchangedItem) => ({ ...exchangedItem, reason: `Item entregue na troca #${item.number}` })))],
+      };
+      const original = orders.find((item) => item.id === order.original_order_id);
+      setPrinting({ ...merged, original_number: original?.number });
+      setPrintingVendor(vendorToPrint);
+      setPrintMode(mode);
+      return true;
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível carregar os dados para impressão");
+      return false;
+    } finally {
+      setLoadingPrintOrderId("");
+    }
+  }, [orders, vendors]);
   useEffect(() => {
     if (!autoPrintOrderId || !ordersLoaded || autoPrintStarted.current) return;
     const order = orders.find((item) => item.id === autoPrintOrderId);
@@ -166,9 +189,12 @@ export default function Orders({ mode }) {
       return;
     }
     autoPrintStarted.current = true;
-    doPrint(order, "a4");
-    setAutoPrintPending(true);
-    setSearchParams({}, { replace: true });
+    const printOrder = async () => {
+      const printStarted = await doPrint(order, "a4");
+      if (printStarted) setAutoPrintPending(true);
+      setSearchParams({}, { replace: true });
+    };
+    printOrder();
   }, [autoPrintOrderId, doPrint, orders, ordersLoaded, setSearchParams]);
   useEffect(() => {
     if (!autoPrintPending || !printing) return undefined;
@@ -327,9 +353,9 @@ export default function Orders({ mode }) {
                   {!["Entregue", "Retirado"].includes(o.status) && (
                     <button className="p-1 hover:bg-green-100 text-green-800" onClick={()=>startFulfillment(o)} title="Registrar entrega ou retirada" data-testid={`fulfill-order-${o.number}`}><Truck size={13}/></button>
                   )}
-                  <button className="p-1 hover:bg-neutral-200" onClick={()=>doPrint(o,"a4")} data-testid={`print-a4-${o.number}`}><Printer size={13}/></button>
-                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"80")} data-testid={`print-80-${o.number}`}>80mm</button>
-                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"a4")} data-testid={`print-pdf-${o.number}`}>PDF</button>
+                  <button className="p-1 hover:bg-neutral-200" onClick={()=>doPrint(o,"a4")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-a4-${o.number}`}><Printer size={13}/></button>
+                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"80")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-80-${o.number}`}>80mm</button>
+                  <button className="p-1 hover:bg-neutral-200 text-[10px]" onClick={()=>doPrint(o,"a4")} disabled={Boolean(loadingPrintOrderId)} data-testid={`print-pdf-${o.number}`}>PDF</button>
                   <button className="p-1 hover:bg-red-100 text-red-700" onClick={()=>remove(o.id)}><Trash2 size={13}/></button>
                 </td>
               </tr>
@@ -341,11 +367,11 @@ export default function Orders({ mode }) {
 
       {/* Hidden print area */}
       <div id="print-area" style={{ position:"absolute", left:"-9999px", top:0 }}>
-        {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={vendors.find((item) => item.id === printing.vendor_id)}/>}
+        {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={printingVendor}/>}
         {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
       </div>
 
-      <Dialog open={!!printing} onOpenChange={(o) => !o && setPrinting(null)}>
+      <Dialog open={!!printing} onOpenChange={(o) => { if (!o) { setPrinting(null); setPrintingVendor(null); } }}>
         <DialogContent className="max-w-[900px] w-[95vw] max-h-[92vh] overflow-y-auto no-print" data-testid="print-preview">
           <DialogHeader><DialogTitle className="font-head">Pré-visualização · Pedido #{printing?.number}</DialogTitle></DialogHeader>
           <div className="flex flex-wrap gap-2">
@@ -359,7 +385,7 @@ export default function Orders({ mode }) {
           </div>
           <div className="bg-neutral-300 p-4 rounded flex justify-center overflow-x-auto">
             <div className="shadow-lg">
-              {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={vendors.find((item) => item.id === printing.vendor_id)} captureRef={jpegTargetRef}/>}
+              {printing && printMode==="a4" && <PrintOrderA4 order={printing} settings={settings} customer={cust(printing.customer_id)} vendor={printingVendor} captureRef={jpegTargetRef}/>}
               {printing && printMode==="80" && <PrintOrder80mm order={printing} settings={settings}/>}
             </div>
           </div>

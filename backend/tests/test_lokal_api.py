@@ -194,6 +194,30 @@ class TestStock:
 
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:
+    def test_order_signatures_are_only_returned_by_detail_endpoint(self, admin):
+        signature = "data:image/png;base64,Zm9v"
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Assinatura",
+                "status": "Orçamento",
+                "signature": signature,
+                "items": [],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+
+        listing = admin.get(f"{BASE_URL}/api/orders")
+        assert listing.status_code == 200
+        listed_order = next(item for item in listing.json() if item["id"] == order["id"])
+        assert "signature" not in listed_order
+
+        detail = admin.get(f"{BASE_URL}/api/orders/{order['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["signature"] == signature
+
     def test_venda_aprovado_stock_and_commission(self, admin):
         p = _prod(admin, "TEST_Cinto", [{"size": "U", "stock": 10}])
         r = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado", "type": "VENDA",
@@ -204,6 +228,26 @@ class TestOrders:
         assert _stock(admin, p["id"], "U") == 7
         coms = [c for c in admin.get(f"{BASE_URL}/api/commissions").json() if c["order_id"] == o["id"]]
         assert len(coms) == 1 and coms[0]["amount"] == 3
+
+    def test_vendor_signatures_are_only_returned_by_detail_endpoint(self, admin):
+        signature = "data:image/png;base64,Zm9v"
+        created = admin.post(
+            f"{BASE_URL}/api/vendors",
+            json={"name": "TEST_Assinatura", "signature": signature},
+        )
+        assert created.status_code == 200, created.text
+        vendor_id = created.json()["id"]
+        try:
+            listing = admin.get(f"{BASE_URL}/api/vendors")
+            assert listing.status_code == 200
+            listed_vendor = next(item for item in listing.json() if item["id"] == vendor_id)
+            assert "signature" not in listed_vendor
+
+            detail = admin.get(f"{BASE_URL}/api/vendors/{vendor_id}")
+            assert detail.status_code == 200
+            assert detail.json()["signature"] == signature
+        finally:
+            admin.delete(f"{BASE_URL}/api/vendors/{vendor_id}")
 
     def test_orcamento_to_aprovado_once(self, admin):
         p = _prod(admin, "TEST_Mochila", [{"size": "U", "stock": 5}])

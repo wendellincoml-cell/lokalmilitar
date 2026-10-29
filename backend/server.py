@@ -35,6 +35,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from pymongo.errors import DuplicateKeyError
@@ -63,6 +64,7 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 
 app = FastAPI(title="LOKAL MILITAR API")
+app.add_middleware(GZipMiddleware, minimum_size=500)
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
@@ -457,7 +459,8 @@ def make_crud(coll_name: str, Model, route_name: Optional[str] = None):
 
     @router.get("")
     async def list_all(user: dict = Depends(get_current_user)):
-        docs = await db[coll_name].find({}, {"_id": 0}).to_list(5000)
+        projection = {"_id": 0, **({"signature": 0} if coll_name == "vendors" else {})}
+        docs = await db[coll_name].find({}, projection).to_list(5000)
         return docs
 
     @router.post("")
@@ -1229,7 +1232,16 @@ def _stock_relevant_order_fields(order: dict) -> dict:
 
 @api.get("/orders")
 async def list_orders(user: dict = Depends(get_current_user)):
-    return await db.orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return await db.orders.find(
+        {}, {"_id": 0, "signature": 0}
+    ).sort("created_at", -1).to_list(5000)
+
+@api.get("/orders/{oid}")
+async def get_order(oid: str, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    return order
 
 @api.post("/orders")
 async def create_order(payload: dict, user: dict = Depends(get_current_user)):
@@ -1942,6 +1954,7 @@ async def dashboard(user: dict = Depends(get_current_user), days: int = Query(7,
         day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
         chart.append({"date": day, "value": orders_by_day.get(day, 0)})
     return {
+        "categories": categories,
         "totals_by_cat": totals_by_cat,
         "orders_today": len(orders_today),
         "orders_today_total": sum(o.get("total", 0) for o in orders_today),

@@ -5,6 +5,8 @@
 
 O frontend é publicado na Vercel, a API FastAPI no Render e o banco no MongoDB Atlas. O arquivo `render.yaml` configura o serviço da API sem armazenar credenciais no repositório.
 
+A API comprime respostas HTTP maiores com gzip e carrega assinaturas de pedidos e vendedores somente quando necessárias, reduzindo tráfego e o tempo de carregamento das listas. O dashboard também reutiliza as categorias obtidas pela própria API. O consumo e o desempenho ainda dependem do volume de uso e dos arquivos enviados.
+
 ### 1. Criar o banco no MongoDB Atlas
 
 1. Crie um cluster e um usuário de banco de dados no Atlas.

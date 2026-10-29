@@ -110,8 +110,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     setError("");
-    Promise.all([api.get("/dashboard", { params: { days: chartDays } }), api.get("/categories")])
-      .then(([d, c]) => { setData(d.data); setCats(c.data); })
+    api.get("/dashboard", { params: { days: chartDays } })
+      .then(async ({ data: dashboardData }) => {
+        setData(dashboardData);
+        if (Array.isArray(dashboardData.categories)) {
+          setCats(dashboardData.categories);
+        } else {
+          const { data: categories } = await api.get("/categories");
+          setCats(categories);
+        }
+      })
       .catch(() => setError("Não foi possível carregar os dados do dashboard."));
   }, [chartDays]);
 
