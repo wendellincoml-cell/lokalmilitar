@@ -931,20 +931,27 @@ async def delete_product(pid: str, user: dict = Depends(get_current_user)):
 
 async def _change_stock(product_id: str, size: Optional[str], delta: float):
     """Adjust product size stock by delta (positive=add, negative=subtract)."""
-    p = await db.products.find_one({"id": product_id})
-    if not p:
-        return False
-    sizes = p.get("sizes", [])
-    found = False
-    for s in sizes:
-        if s.get("size") == size:
-            s["stock"] = float(s.get("stock", 0)) + delta
-            found = True
-            break
-    if not found:
-        sizes.append({"size": size or "-", "stock": delta, "stock_min": 0})
-    await db.products.update_one({"id": product_id}, {"$set": {"sizes": sizes}})
-    return True
+    size_key = size or "-"
+    result = await db.products.update_one(
+        {"id": product_id, "sizes.size": size_key},
+        {"$inc": {"sizes.$.stock": delta}},
+    )
+    if result.matched_count:
+        return True
+
+    result = await db.products.update_one(
+        {"id": product_id, "sizes.size": {"$ne": size_key}},
+        {"$push": {"sizes": {"size": size_key, "stock": delta, "stock_min": 0}}},
+    )
+    if result.matched_count:
+        return True
+
+    # Another request may have added this size between the two atomic updates.
+    result = await db.products.update_one(
+        {"id": product_id, "sizes.size": size_key},
+        {"$inc": {"sizes.$.stock": delta}},
+    )
+    return result.matched_count > 0
 
 async def _stock_of(product_id: str, size: Optional[str]) -> float:
     p = await db.products.find_one({"id": product_id})

@@ -3,6 +3,7 @@ import os
 import uuid
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 import pytest
 import requests
@@ -219,6 +220,51 @@ class TestOrders:
             for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
             if movement.get("order_id") == order["id"]
         ]
+
+    def test_concurrent_order_fulfillments_preserve_stock_and_movements(self, admin):
+        product = _prod(admin, "TEST_Baixa_Concorrente", [{"size": "U", "stock": 20}])
+        orders = []
+        for index in range(10):
+            response = admin.post(
+                f"{BASE_URL}/api/orders",
+                json={
+                    "customer_name": f"TEST_Baixa_Concorrente_{index}",
+                    "status": "Separado",
+                    "items": [{
+                        "product_id": product["id"],
+                        "name": product["name"],
+                        "size": "U",
+                        "qty": 1,
+                        "unit_price": 10,
+                    }],
+                },
+            )
+            assert response.status_code == 200, response.text
+            order = response.json()
+            orders.append(order)
+            CREATED["orders"].append(order["id"])
+
+        def fulfill(order):
+            return requests.post(
+                f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+                json={"delivery_type": "RETIRADA"},
+                timeout=15,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(orders)) as executor:
+            responses = list(executor.map(fulfill, orders))
+
+        assert all(response.status_code == 200 for response in responses), [
+            response.text for response in responses if response.status_code != 200
+        ]
+        assert _stock(admin, product["id"], "U") == 10
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        order_movements = [
+            movement for movement in movements
+            if movement.get("order_id") in {order["id"] for order in orders}
+        ]
+        assert len(order_movements) == 10
+        assert sum(movement["qty"] for movement in order_movements if movement["kind"] == "SAIDA") == 10
 
     def test_separated_status_tracks_when_order_was_separated(self, admin):
         created = admin.post(
