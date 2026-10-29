@@ -621,10 +621,172 @@ class TestOrders:
         movements = [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
         assert sorted((movement["kind"], movement["qty"]) for movement in movements) == [("ENTRADA", 1), ("SAIDA", 2)]
 
-        reopened = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**completed.json(), "status": "Aprovado"})
+        reopened = admin.put(f"{BASE_URL}/api/orders/{o['id']}", json={**completed.json(), "status": "Separado"})
         assert reopened.status_code == 200, reopened.text
         assert _stock(admin, p["id"], "40") == 5
         assert not [m for m in admin.get(f"{BASE_URL}/api/stock_movements").json() if m.get("order_id") == o["id"]]
+
+    def test_sync_separated_order_reverses_stale_stock_movement(self, admin):
+        from pymongo import MongoClient
+
+        product = _prod(admin, "TEST_Sincronizar_Separado", [{"size": "U", "stock": 5}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Sincronizar_Separado",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        with MongoClient(os.environ["MONGO_URL"]) as client:
+            database = client[os.environ["DB_NAME"]]
+            sizes = database.products.find_one({"id": product["id"]})["sizes"]
+            sizes[0]["stock"] = 3
+            database.products.update_one({"id": product["id"]}, {"$set": {"sizes": sizes}})
+            database.stock_movements.insert_one({
+                "id": uuid.uuid4().hex,
+                "product_id": product["id"],
+                "product_name": product["name"],
+                "size": "U",
+                "qty": 2,
+                "kind": "SAIDA",
+                "reason": f"VENDA pedido #{order['number']}",
+                "order_id": order["id"],
+                "created_at": "2025-01-01T00:00:00+00:00",
+            })
+
+        synchronized = admin.post(f"{BASE_URL}/api/orders/{order['id']}/sync-stock-status")
+        assert synchronized.status_code == 200, synchronized.text
+        assert synchronized.json()["status"] == "Separado"
+        assert synchronized.json()["stock_applied"] is False
+        assert _stock(admin, product["id"], "U") == 5
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
+
+    def test_sync_separated_order_reverses_legacy_empty_size_from_original_stock_size(self, admin):
+        from pymongo import MongoClient
+
+        product = _prod(
+            admin,
+            "TEST_Sincronizar_Tamanho_Legado",
+            [{"size": "", "stock": 4}, {"size": "-", "stock": -2}],
+        )
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Sincronizar_Tamanho_Legado",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        with MongoClient(os.environ["MONGO_URL"]) as client:
+            client[os.environ["DB_NAME"]].stock_movements.insert_one({
+                "id": uuid.uuid4().hex,
+                "product_id": product["id"],
+                "product_name": product["name"],
+                "size": "",
+                "qty": 2,
+                "kind": "SAIDA",
+                "reason": f"VENDA pedido #{order['number']}",
+                "order_id": order["id"],
+                "created_at": "2025-01-01T00:00:00+00:00",
+            })
+
+        synchronized = admin.post(f"{BASE_URL}/api/orders/{order['id']}/sync-stock-status")
+        assert synchronized.status_code == 200, synchronized.text
+        product_after = next(
+            item for item in admin.get(f"{BASE_URL}/api/products").json()
+            if item["id"] == product["id"]
+        )
+        assert product_after["sizes"] == [
+            {"size": "", "stock": 4, "stock_min": 0},
+            {"size": "-", "stock": 0, "stock_min": 0},
+        ]
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
+
+    def test_repair_completed_legacy_empty_size_moves_stock_to_correct_variant(self, admin):
+        from pymongo import MongoClient
+
+        product = _prod(
+            admin,
+            "TEST_Corrigir_Tamanho_Legado_Entregue",
+            [{"size": "", "stock": 4}, {"size": "-", "stock": -2}],
+        )
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Corrigir_Tamanho_Legado_Entregue",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        with MongoClient(os.environ["MONGO_URL"]) as client:
+            database = client[os.environ["DB_NAME"]]
+            database.orders.update_one(
+                {"id": order["id"]},
+                {"$set": {"status": "Entregue", "stock_applied": True}},
+            )
+            database.stock_movements.insert_one({
+                "id": uuid.uuid4().hex,
+                "product_id": product["id"],
+                "product_name": product["name"],
+                "size": "",
+                "qty": 2,
+                "kind": "SAIDA",
+                "reason": f"VENDA pedido #{order['number']}",
+                "order_id": order["id"],
+                "created_at": "2025-01-01T00:00:00+00:00",
+            })
+
+        repaired = admin.post(f"{BASE_URL}/api/orders/{order['id']}/repair-stock")
+        assert repaired.status_code == 200, repaired.text
+        product_after = next(
+            item for item in admin.get(f"{BASE_URL}/api/products").json()
+            if item["id"] == product["id"]
+        )
+        assert product_after["sizes"] == [
+            {"size": "", "stock": 2, "stock_min": 0},
+            {"size": "-", "stock": 0, "stock_min": 0},
+        ]
+        movement = next(
+            item for item in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if item.get("order_id") == order["id"]
+        )
+        assert movement["kind"] == "SAIDA" and movement["stock_size"] == ""
 
     def test_cancelamento_reverte_apenas_saida_de_pedido_concluido(self, admin):
         product = _prod(admin, "TEST_Cancelamento", [{"size": "U", "stock": 5}])

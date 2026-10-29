@@ -57,6 +57,7 @@ export default function Orders({ mode }) {
   const [bulkStatus, setBulkStatus] = useState("");
   const [filtersDialogOpen, setFiltersDialogOpen] = useState(false);
   const [updatingBulkStatus, setUpdatingBulkStatus] = useState(false);
+  const [syncingSelectedStock, setSyncingSelectedStock] = useState(false);
   const [printingSelectedOrders, setPrintingSelectedOrders] = useState(false);
   const [batchPrinting, setBatchPrinting] = useState([]);
   const [products, setProducts] = useState([]);
@@ -342,7 +343,7 @@ export default function Orders({ mode }) {
   };
 
   const changeSelectedOrdersStatus = async () => {
-    if (!bulkStatus || selectedVisibleOrderIds.length === 0 || updatingBulkStatus) return;
+    if (!bulkStatus || selectedVisibleOrderIds.length === 0 || updatingBulkStatus || syncingSelectedStock) return;
     const selectedOrders = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
     const completedOrders = bulkStatus === "Cancelado"
       ? []
@@ -374,6 +375,32 @@ export default function Orders({ mode }) {
       toast.info(`${completedOrders.length} pedido(s) entregue(s)/retirado(s) ignorado(s); conclua ou confira individualmente.`);
     }
     if (failures.length > 0) toast.error(`Falha ao atualizar: ${failures.join(", ")}`);
+  };
+  const syncSelectedOrdersStock = async () => {
+    if (selectedVisibleOrderIds.length === 0 || updatingBulkStatus || syncingSelectedStock) return;
+    const ordersToSync = shownOrders.filter((order) => selectedVisibleOrderIds.includes(order.id));
+    if (!window.confirm(
+      `Sincronizar o estoque de ${ordersToSync.length} pedido(s) pelo status atual? Separados não terão baixa; Entregues/Retirados terão baixas e devoluções conferidas; Cancelados terão apenas as saídas estornadas.`,
+    )) return;
+    setSyncingSelectedStock(true);
+    const results = [];
+    for (let index = 0; index < ordersToSync.length; index += 10) {
+      const batch = ordersToSync.slice(index, index + 10);
+      results.push(...await Promise.allSettled(
+        batch.map((order) => api.post(`/orders/${order.id}/sync-stock-status`)),
+      ));
+    }
+    const failures = results.flatMap((result, index) => (
+      result.status === "rejected" ? [`#${ordersToSync[index].number}`] : []
+    ));
+    const synchronizedCount = results.length - failures.length;
+    await load();
+    setSelectedOrderIds([]);
+    setSyncingSelectedStock(false);
+    if (synchronizedCount > 0) {
+      toast.success(`${synchronizedCount} pedido(s) sincronizado(s) conforme o status atual`);
+    }
+    if (failures.length > 0) toast.error(`Falha ao sincronizar estoque: ${failures.join(", ")}`);
   };
   useEffect(() => {
     if (!autoPrintOrderId || !ordersLoaded || autoPrintStarted.current) return;
@@ -626,10 +653,19 @@ export default function Orders({ mode }) {
               type="button"
               className="lm-btn lm-btn-olive"
               onClick={changeSelectedOrdersStatus}
-              disabled={selectedVisibleOrderIds.length === 0 || !bulkStatus || updatingBulkStatus}
+              disabled={selectedVisibleOrderIds.length === 0 || !bulkStatus || updatingBulkStatus || syncingSelectedStock}
               data-testid="apply-bulk-order-status"
             >
               <Check size={14} />{updatingBulkStatus ? "Atualizando..." : "Aplicar aos selecionados"}
+            </button>
+            <button
+              type="button"
+              className="lm-btn lm-btn-outline"
+              onClick={syncSelectedOrdersStock}
+              disabled={selectedVisibleOrderIds.length === 0 || updatingBulkStatus || syncingSelectedStock}
+              data-testid="sync-selected-order-stock"
+            >
+              <Check size={14} />{syncingSelectedStock ? "Sincronizando..." : "Sincronizar estoque pelo status"}
             </button>
             <span className="text-xs text-neutral-600">Concluir Entregue/Retirado exige conferência individual dos itens.</span>
           </>
