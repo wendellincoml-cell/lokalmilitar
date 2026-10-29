@@ -90,6 +90,14 @@ export default function Orders({ mode }) {
       setOrdersLoaded(true);
     }
   };
+  const refreshOrders = async () => {
+    try {
+      const response = await api.get("/orders");
+      setOrders(response.data);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Pedido concluído, mas não foi possível atualizar a lista");
+    }
+  };
   useEffect(() => { load(); }, []);
 
   const prodById = useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
@@ -399,11 +407,14 @@ export default function Orders({ mode }) {
       return;
     }
     try {
-      await api.post(`/orders/${fulfillment.order.id}/fulfill`, {
+      const response = await api.post(`/orders/${fulfillment.order.id}/fulfill`, {
         delivery_type: fulfillment.delivery_type,
         vehicle_id: fulfillment.delivery_type === "ENTREGA" ? fulfillment.vehicle_id || null : null,
         signature: fulfillment.signature || null,
       });
+      setOrders((current) => current.map((order) => (
+        order.id === fulfillment.order.id ? response.data : order
+      )));
       const completionMessage = {
         ENTREGA: "Pedido entregue e estoque atualizado",
         RETIRADA: "Pedido retirado e estoque atualizado",
@@ -411,7 +422,7 @@ export default function Orders({ mode }) {
       };
       toast.success(completionMessage[fulfillment.delivery_type]);
       closeFulfillment();
-      load();
+      refreshOrders();
     } catch (error) {
       toast.error(error.response?.data?.detail || "Não foi possível concluir o pedido");
     }

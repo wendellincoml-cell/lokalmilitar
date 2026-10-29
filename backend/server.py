@@ -1184,50 +1184,92 @@ async def update_order_number_sequence(
 
 async def _validate_order_stock(order: dict):
     items = order.get("items", []) + order.get("returned_items", [])
+    product_ids = list(dict.fromkeys(item.get("product_id") for item in items if item.get("product_id")))
+    products = await db.products.find(
+        {"id": {"$in": product_ids}},
+        {"_id": 0},
+    ).to_list(len(product_ids)) if product_ids else []
+    products_by_id = {product["id"]: product for product in products}
     for item in items:
         quantity = float(item.get("qty", 1))
         if quantity <= 0:
             raise HTTPException(400, "A quantidade dos itens deve ser maior que zero")
-        product = await db.products.find_one({"id": item.get("product_id")}, {"_id": 0})
+        product = products_by_id.get(item.get("product_id"))
         if not product:
             raise HTTPException(400, f"Produto do pedido não encontrado: {item.get('name') or item.get('product_id')}")
         sizes = product.get("sizes", [])
         if sizes and not any(size.get("size") == item.get("size") for size in sizes):
             raise HTTPException(400, f"Tamanho não cadastrado para {product.get('name')}")
+    return products_by_id
 
 async def _apply_order_stock(order: dict):
     """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
-    await _validate_order_stock(order)
+    products_by_id = await _validate_order_stock(order)
     log = order.get("log", [])
-    for it in order.get("items", []):
-        pid = it["product_id"]
-        size = it.get("size")
-        qty = float(it.get("qty", 1))
-        prod = await db.products.find_one({"id": pid}, {"_id": 0})
-        if not prod:
-            continue
-        await _cover_shortage(prod, size, qty, order, log)
-        await _change_stock(pid, size, -qty)
-        await _log_mov(prod, size, qty, "SAIDA", f"{order.get('type')} pedido #{order.get('number')}", order["id"])
-    # Devoluções: adicionar ao estoque
+    sales = order.get("items", [])
+    sales_totals = {}
+    for item in sales:
+        key = (item["product_id"], item.get("size"))
+        sales_totals[key] = sales_totals.get(key, 0) + float(item.get("qty", 1))
+
+    enough_stock_without_disassembly = all(
+        next(
+            (float(size.get("stock", 0)) for size in products_by_id[product_id].get("sizes", []) if size.get("size") == size_name),
+            0,
+        ) >= quantity
+        for (product_id, size_name), quantity in sales_totals.items()
+    )
+    if enough_stock_without_disassembly:
+        for item in sales:
+            product_id = item["product_id"]
+            size = item.get("size")
+            quantity = float(item.get("qty", 1))
+            product = products_by_id[item["product_id"]]
+            await _change_stock(product_id, size, -quantity)
+            await _log_mov(
+                product,
+                size,
+                quantity,
+                "SAIDA",
+                f"{order.get('type')} pedido #{order.get('number')}",
+                order["id"],
+            )
+    else:
+        for item in sales:
+            product_id = item["product_id"]
+            size = item.get("size")
+            quantity = float(item.get("qty", 1))
+            product = products_by_id[product_id]
+            await _cover_shortage(product, size, quantity, order, log)
+            await _change_stock(product_id, size, -quantity)
+            await _log_mov(
+                product,
+                size,
+                quantity,
+                "SAIDA",
+                f"{order.get('type')} pedido #{order.get('number')}",
+                order["id"],
+            )
+
     for ri in order.get("returned_items", []):
         pid = ri["product_id"]
         size = ri.get("size")
         qty = float(ri.get("qty", 1))
-        prod = await db.products.find_one({"id": pid})
+        prod = products_by_id[pid]
         await _change_stock(pid, size, qty)
         await db.stock_movements.insert_one({
             "id": new_id(), "product_id": pid,
-            "product_name": (prod or {}).get("name"), "sku": (prod or {}).get("sku"),
+            "product_name": prod.get("name"), "sku": prod.get("sku"),
             "size": size, "qty": qty, "kind": "ENTRADA",
             "reason": f"Devolução pedido #{order.get('number')} - {ri.get('reason') or ''}",
             "order_id": order["id"], "created_at": now_iso()
         })
+    update = {"stock_applied": True}
     if log:
-        await db.orders.update_one({"id": order["id"]}, {"$set": {"log": log}})
+        update["log"] = log
     await db.orders.update_one(
         {"id": order["id"]},
-        {"$set": {"stock_applied": True}, "$unset": {"stock_application_started_at": ""}},
+        {"$set": update, "$unset": {"stock_application_started_at": ""}},
     )
 
 async def _reverse_order_stock(order_id: str, mark_unapplied: bool = True):
