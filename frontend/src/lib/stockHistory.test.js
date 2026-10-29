@@ -58,4 +58,42 @@ describe("getStockHistoryRows", () => {
       expect.objectContaining({ order_id: "order-2", kind: "SEM_BAIXA", qty: 0, expectedQty: 3, reconciliation: "missing" }),
     ]));
   });
+
+  it("labels returned products from completed orders as returned", () => {
+    const rows = getStockHistoryRows(
+      [
+        {
+          id: "return-movement",
+          order_id: "order-1",
+          product_id: "product-1",
+          product_name: "Bota",
+          size: "42",
+          kind: "ENTRADA",
+          qty: 1,
+          reason: "Devolução pedido #4",
+        },
+        {
+          id: "manual-entry",
+          order_id: null,
+          product_id: "product-2",
+          product_name: "Camisa",
+          size: "M",
+          kind: "ENTRADA",
+          qty: 3,
+        },
+      ],
+      [{
+        id: "order-1",
+        number: 4,
+        status: "Entregue",
+        items: [],
+        returned_items: [{ product_id: "product-1", name: "Bota", size: "42", qty: 1 }],
+      }],
+    );
+
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "return-movement", kind: "DEVOLVIDO", qty: 1 }),
+      expect.objectContaining({ id: "manual-entry", kind: "ENTRADA", qty: 3 }),
+    ]));
+  });
 });

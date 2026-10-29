@@ -1182,8 +1182,7 @@ async def update_order_number_sequence(
     )
     return {"current_number": await _current_order_number()}
 
-async def _apply_order_stock(order: dict):
-    """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
+async def _validate_order_stock(order: dict):
     items = order.get("items", []) + order.get("returned_items", [])
     for item in items:
         quantity = float(item.get("qty", 1))
@@ -1195,6 +1194,10 @@ async def _apply_order_stock(order: dict):
         sizes = product.get("sizes", [])
         if sizes and not any(size.get("size") == item.get("size") for size in sizes):
             raise HTTPException(400, f"Tamanho não cadastrado para {product.get('name')}")
+
+async def _apply_order_stock(order: dict):
+    """Decrement stock for VENDA/TROCA out items; add for DEVOLUCAO/returned items."""
+    await _validate_order_stock(order)
     log = order.get("log", [])
     for it in order.get("items", []):
         pid = it["product_id"]
@@ -1222,7 +1225,10 @@ async def _apply_order_stock(order: dict):
         })
     if log:
         await db.orders.update_one({"id": order["id"]}, {"$set": {"log": log}})
-    await db.orders.update_one({"id": order["id"]}, {"$set": {"stock_applied": True}})
+    await db.orders.update_one(
+        {"id": order["id"]},
+        {"$set": {"stock_applied": True}, "$unset": {"stock_application_started_at": ""}},
+    )
 
 async def _reverse_order_stock(order_id: str, mark_unapplied: bool = True):
     movements = await db.stock_movements.find({"order_id": order_id}).to_list(10000)
@@ -1257,12 +1263,64 @@ async def _cancel_order_stock(order_id: str):
 async def _has_order_stock_movements(order_id: str) -> bool:
     return await db.stock_movements.count_documents({"order_id": order_id}) > 0
 
-async def _claim_order_stock_application(order_id: str) -> bool:
+def _order_has_stock_items(order: dict) -> bool:
+    return bool(order.get("items") or order.get("returned_items"))
+
+async def _order_stock_movements_match(order: dict) -> bool:
+    expected = {}
+    for kind, field in (("SAIDA", "items"), ("ENTRADA", "returned_items")):
+        for item in order.get(field, []):
+            key = (kind, item.get("product_id"), item.get("size"))
+            expected[key] = expected.get(key, 0) + float(item.get("qty", 1))
+
+    actual = {}
+    movements = await db.stock_movements.find(
+        {"order_id": order["id"], "kind": {"$in": ["SAIDA", "ENTRADA"]}},
+        {"_id": 0, "kind": 1, "product_id": 1, "size": 1, "qty": 1},
+    ).to_list(10000)
+    for movement in movements:
+        key = (movement.get("kind"), movement.get("product_id"), movement.get("size"))
+        actual[key] = actual.get(key, 0) + float(movement.get("qty", 0))
+
+    return expected.keys() == actual.keys() and all(
+        abs(expected[key] - actual[key]) < 1e-9 for key in expected
+    )
+
+async def _reset_incomplete_stock_application(order: dict) -> bool:
+    if (
+        not _order_is_fulfilled(order)
+        or order.get("stock_applied") is not True
+        or not _order_has_stock_items(order)
+        or await _order_stock_movements_match(order)
+    ):
+        return False
     result = await db.orders.update_one(
-        {"id": order_id, "stock_applied": {"$ne": True}},
-        {"$set": {"stock_applied": True}},
+        {"id": order["id"], "stock_applied": True},
+        {"$set": {"stock_applied": False}},
     )
     return result.matched_count > 0
+
+async def _claim_order_stock_application(order_id: str) -> bool:
+    stale_before = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    result = await db.orders.update_one(
+        {
+            "id": order_id,
+            "stock_applied": {"$ne": True},
+            "$or": [
+                {"stock_application_started_at": {"$exists": False}},
+                {"stock_application_started_at": None},
+                {"stock_application_started_at": {"$lte": stale_before}},
+            ],
+        },
+        {"$set": {"stock_application_started_at": now_iso()}},
+    )
+    return result.matched_count > 0
+
+async def _release_order_stock_claim(order_id: str):
+    await db.orders.update_one(
+        {"id": order_id, "stock_applied": {"$ne": True}},
+        {"$unset": {"stock_application_started_at": ""}},
+    )
 
 def _order_is_fulfilled(order: dict) -> bool:
     return order.get("status") in ("Entregue", "Retirado")
@@ -1352,8 +1410,16 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         payload["separated_at"] = None
     old_stock_applied = old.get("stock_applied")
     if old_stock_applied is None:
-        old_stock_applied = await _has_order_stock_movements(oid)
+        old_stock_applied = await _order_stock_movements_match(old)
+    elif old_stock_applied and await _reset_incomplete_stock_application(old):
+        old_stock_applied = False
     old_stock_fields = _stock_relevant_order_fields(old)
+    if (
+        _order_is_fulfilled(candidate)
+        and candidate.get("type") in ("VENDA", "TROCA", "DEVOLUCAO")
+        and (not old_stock_applied or stock_fields_changed_before_update)
+    ):
+        await _validate_order_stock(candidate)
     if allow_fulfillment:
         update_result = await db.orders.update_one(
             {"id": oid, "status": old.get("status")},
@@ -1381,9 +1447,13 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     if not old_stock_applied and _order_is_fulfilled(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
         if not await _claim_order_stock_application(oid):
             raise HTTPException(409, "O estoque deste pedido está sendo atualizado; atualize a tela e tente novamente")
-        if await _has_order_stock_movements(oid):
-            await _reverse_order_stock(oid, mark_unapplied=False)
-        await _apply_order_stock(doc)
+        try:
+            if await _has_order_stock_movements(oid):
+                await _reverse_order_stock(oid, mark_unapplied=False)
+            await _apply_order_stock(doc)
+        except Exception:
+            await _release_order_stock_claim(oid)
+            raise
         doc["stock_applied"] = True
     # Commissions start when a sale is approved; stock moves only on delivery or pickup.
     was_active = old.get("status") in ACTIVE_STATUSES
@@ -1406,12 +1476,19 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
             stock_applied = order.get("stock_applied")
             if stock_applied is None:
                 stock_applied = await _has_order_stock_movements(oid)
+            elif stock_applied and await _reset_incomplete_stock_application(order):
+                stock_applied = False
             if not stock_applied:
                 if not await _claim_order_stock_application(oid):
                     raise HTTPException(400, "O pedido já está sendo atualizado")
-                if await _has_order_stock_movements(oid):
-                    await _reverse_order_stock(oid, mark_unapplied=False)
-                await _apply_order_stock(order)
+                try:
+                    await _validate_order_stock(order)
+                    if await _has_order_stock_movements(oid):
+                        await _reverse_order_stock(oid, mark_unapplied=False)
+                    await _apply_order_stock(order)
+                except Exception:
+                    await _release_order_stock_claim(oid)
+                    raise
                 return await db.orders.find_one({"id": oid}, {"_id": 0})
         raise HTTPException(400, "O pedido já foi entregue ou retirado")
     delivery_type = payload.get("delivery_type")

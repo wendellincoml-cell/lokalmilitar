@@ -305,6 +305,99 @@ class TestOrders:
         assert len(order_movements) == 1
         assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
 
+    def test_completed_order_marked_applied_without_movements_is_repaired(self, admin):
+        from pymongo import MongoClient
+
+        product = _prod(admin, "TEST_Baixa_Pendente_Antiga", [{"size": "U", "stock": 5}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Baixa_Pendente_Antiga",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        with MongoClient(os.environ["MONGO_URL"]) as client:
+            client[os.environ["DB_NAME"]].orders.update_one(
+                {"id": order["id"]},
+                {"$set": {"status": "Entregue", "stock_applied": True}},
+            )
+
+        retried = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Entregue"},
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["stock_applied"] is True
+        assert _stock(admin, product["id"], "U") == 3
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        order_movements = [movement for movement in movements if movement.get("order_id") == order["id"]]
+        assert len(order_movements) == 1
+        assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
+
+    def test_completed_order_with_partial_movement_is_reconciled(self, admin):
+        from pymongo import MongoClient
+
+        product = _prod(admin, "TEST_Baixa_Parcial", [{"size": "U", "stock": 5}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Baixa_Parcial",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+        with MongoClient(os.environ["MONGO_URL"]) as client:
+            database = client[os.environ["DB_NAME"]]
+            sizes = database.products.find_one({"id": product["id"]})["sizes"]
+            sizes[0]["stock"] = 4
+            database.products.update_one({"id": product["id"]}, {"$set": {"sizes": sizes}})
+            database.orders.update_one(
+                {"id": order["id"]},
+                {"$set": {"status": "Entregue", "stock_applied": True}},
+            )
+            database.stock_movements.insert_one({
+                "id": uuid.uuid4().hex,
+                "product_id": product["id"],
+                "product_name": product["name"],
+                "size": "U",
+                "qty": 1,
+                "kind": "SAIDA",
+                "reason": f"VENDA pedido #{order['number']}",
+                "order_id": order["id"],
+                "created_at": "2025-01-01T00:00:00+00:00",
+            })
+
+        retried = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Entregue"},
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["stock_applied"] is True
+        assert _stock(admin, product["id"], "U") == 3
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        order_movements = [movement for movement in movements if movement.get("order_id") == order["id"]]
+        assert len(order_movements) == 1
+        assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
+
     def test_separated_status_tracks_when_order_was_separated(self, admin):
         created = admin.post(
             f"{BASE_URL}/api/orders",
@@ -587,17 +680,77 @@ class TestOrders:
         ]
 
     def test_desmontagem_farda(self, admin):
-        farda = _prod(admin, "TEST_FARDA CAMUFLADA", [{"size": "M", "stock": 1}])
         calca = _prod(admin, "TEST_CALÇA CAMUFLADA", [{"size": "M", "stock": 0}])
         gandola = _prod(admin, "TEST_GANDOLA CAMUFLADA", [{"size": "M", "stock": 0}])
-        o = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Aprovado",
+        farda = _prod(
+            admin,
+            "TEST_FARDA CAMUFLADA",
+            [{"size": "M", "stock": 1}],
+            linked_ids=[calca["id"], gandola["id"]],
+        )
+        created = admin.post(f"{BASE_URL}/api/orders", json={"customer_name": "TEST_Cli", "status": "Separado",
                                                         "items": [{"product_id": calca["id"], "name": calca["name"], "size": "M", "qty": 1, "unit_price": 100}]}).json()
-        CREATED["orders"].append(o["id"])
+        CREATED["orders"].append(created["id"])
+        assert _stock(admin, farda["id"], "M") == 1
+        assert _stock(admin, calca["id"], "M") == 0
+        assert _stock(admin, gandola["id"], "M") == 0
+
+        completed = admin.put(
+            f"{BASE_URL}/api/orders/{created['id']}",
+            json={"status": "Entregue"},
+        )
+        assert completed.status_code == 200, completed.text
         assert _stock(admin, farda["id"], "M") == 0
         assert _stock(admin, calca["id"], "M") == 0
         assert _stock(admin, gandola["id"], "M") == 1
-        od = next(x for x in admin.get(f"{BASE_URL}/api/orders").json() if x["id"] == o["id"])
+        od = next(x for x in admin.get(f"{BASE_URL}/api/orders").json() if x["id"] == created["id"])
         assert any("FARDA" in l for l in od.get("log", []))
+        order_movements = [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == created["id"]
+        ]
+        assert sorted((movement["kind"], movement["product_id"], movement["qty"]) for movement in order_movements) == sorted([
+            ("DESMONTAGEM_SAIDA", farda["id"], 1),
+            ("DESMONTAGEM_ENTRADA", calca["id"], 1),
+            ("DESMONTAGEM_ENTRADA", gandola["id"], 1),
+            ("SAIDA", calca["id"], 1),
+        ])
+
+    def test_invalid_stock_item_does_not_complete_order_or_lock_application(self, admin):
+        product = _prod(admin, "TEST_Tamanho_Invalido_Entrega", [{"size": "M", "stock": 2}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Tamanho_Invalido_Entrega",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "PP",
+                    "qty": 1,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+
+        rejected = admin.put(
+            f"{BASE_URL}/api/orders/{order['id']}",
+            json={"status": "Entregue"},
+        )
+        assert rejected.status_code == 400
+        current_order = admin.get(f"{BASE_URL}/api/orders/{order['id']}").json()
+        assert current_order["status"] == "Separado"
+        assert current_order["stock_applied"] is False
+        assert _stock(admin, product["id"], "M") == 2
+        assert not [
+            movement
+            for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement.get("order_id") == order["id"]
+        ]
 
     def test_troca_linked_and_avulsa(self, admin):
         p = _prod(admin, "TEST_Camiseta", [{"size": "G", "stock": 5}, {"size": "M", "stock": 5}])

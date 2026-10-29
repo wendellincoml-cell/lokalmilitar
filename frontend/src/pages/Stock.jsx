@@ -6,6 +6,7 @@ import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, E
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import { useAuth } from "@/contexts/AuthContext";
 import { getStockHistoryRows } from "@/lib/stockHistory";
 
 const KIND_STYLE = {
@@ -13,11 +14,13 @@ const KIND_STYLE = {
   DESMONTAGEM_SAIDA: "bg-amber-100 text-amber-800", DESMONTAGEM_ENTRADA: "bg-lime-100 text-lime-800",
   MONTAGEM_SAIDA: "bg-orange-100 text-orange-800", MONTAGEM_ENTRADA: "bg-blue-100 text-blue-800",
   SEM_BAIXA: "bg-amber-200 text-amber-950",
+  DEVOLVIDO: "bg-yellow-100 text-yellow-900",
 };
 const KIND_LABEL = {
   DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)",
   MONTAGEM_SAIDA: "Montagem (−)", MONTAGEM_ENTRADA: "Montagem (+)",
   SEM_BAIXA: "Sem baixa",
+  DEVOLVIDO: "Devolvido",
 };
 const BLANK = { product_id: "", size: "", qty: 1, nf: "", reason: "", kind: "ENTRADA" };
 const BLANK_ENTRY_ITEM = { product_id: "", size: "", qty: 1 };
@@ -40,10 +43,13 @@ const openPrint = (title, rows, totals) => {
 };
 
 export default function Stock() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [products, setProducts] = useState([]);
   const [movements, setMovements] = useState([]);
   const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [repairingOrders, setRepairingOrders] = useState(() => new Set());
   const [params] = useSearchParams();
   const [tab, setTab] = useState("posicao");
   const [q, setQ] = useState("");
@@ -65,6 +71,24 @@ export default function Stock() {
     setProducts(p.data); setMovements(m.data); setCategories(c.data); setOrders(o.data);
   };
   useEffect(() => { load(); }, []);
+  const repairOrderStock = async (orderId) => {
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) return toast.error("Pedido não encontrado. Atualize a tela e tente novamente.");
+    setRepairingOrders((current) => new Set(current).add(orderId));
+    try {
+      await api.put(`/orders/${orderId}`, { status: order.status });
+      toast.success(`Baixa do pedido #${order.number} conferida e corrigida`);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível corrigir a baixa do pedido");
+    } finally {
+      setRepairingOrders((current) => {
+        const next = new Set(current);
+        next.delete(orderId);
+        return next;
+      });
+    }
+  };
 
   const catMap = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c.name])), [categories]);
   const topCategories = useMemo(() => categories.filter((category) => !category.parent_id), [categories]);
@@ -338,7 +362,19 @@ export default function Stock() {
                     )}
                   </td>
                   <td className="text-sm">{m.reason}</td><td>{m.nf}</td>
-                  <td>{!m.order_id && <button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)} aria-label="Excluir movimentação e estornar estoque"><Trash2 size={14} /></button>}</td>
+                  <td className="whitespace-nowrap">
+                    {isAdmin && m.order_id && m.reconciliation && m.reconciliation !== "matched" && (
+                      <button
+                        className="text-xs underline mr-2 disabled:opacity-50"
+                        onClick={() => repairOrderStock(m.order_id)}
+                        disabled={repairingOrders.has(m.order_id)}
+                        data-testid={`repair-order-stock-${m.order_id}`}
+                      >
+                        {repairingOrders.has(m.order_id) ? "Corrigindo..." : "Corrigir baixa"}
+                      </button>
+                    )}
+                    {!m.order_id && <button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)} aria-label="Excluir movimentação e estornar estoque"><Trash2 size={14} /></button>}
+                  </td>
                 </tr>
               ))}
               {movs.length === 0 && <tr><td colSpan={9} className="text-center text-neutral-500 py-8">Sem movimentações.</td></tr>}

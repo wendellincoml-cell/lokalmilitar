@@ -13,6 +13,7 @@ const quantitiesMatch = (first, second) => Math.abs(first - second) < 1e-9;
 export const getStockHistoryRows = (movements, orders) => {
   const ordersById = new Map(orders.map((order) => [order.id, order]));
   const expectedSales = new Map();
+  const returnedItems = new Set();
 
   orders.filter((order) => (
     COMPLETED_ORDER_STATUSES.has(order.status) && STOCK_ORDER_TYPES.has(order.type || "VENDA")
@@ -30,6 +31,9 @@ export const getStockHistoryRows = (movements, orders) => {
       };
       expected.qty += Number(item.qty || 1);
       expectedSales.set(key, expected);
+    });
+    (order.returned_items || []).forEach((item) => {
+      if (item.product_id) returnedItems.add(itemKey(order.id, item.product_id, item.size));
     });
   });
 
@@ -59,6 +63,15 @@ export const getStockHistoryRows = (movements, orders) => {
         expectedQty,
         reconciliation: expectedQty === null ? null : quantitiesMatch(qty, expectedQty) ? "matched" : "mismatch",
       });
+      return;
+    }
+
+    if (
+      movement.order_id
+      && movement.kind === "ENTRADA"
+      && returnedItems.has(itemKey(movement.order_id, movement.product_id, movement.size))
+    ) {
+      rows.set(movement.id, { ...movement, kind: "DEVOLVIDO" });
       return;
     }
 
