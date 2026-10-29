@@ -139,6 +139,10 @@ export default function Orders({ mode }) {
       id: `${order.id}:${index}`,
     }));
   }), [filterCustomer, filterDateFrom, filterDateTo, filterOrderNumber, filterStatus, orders]);
+  const showOrdersTable = !isTrocas
+    || !ordersLoaded
+    || shownOrders.length > 0
+    || completedOrderReturns.length === 0;
   const selectedVisibleOrderIds = shownOrders
     .filter((order) => selectedOrderIds.includes(order.id))
     .map((order) => order.id);
@@ -614,6 +618,7 @@ export default function Orders({ mode }) {
         </>
       )}
 
+      {showOrdersTable && (
       <div className="lm-table-wrap overflow-x-auto">
         <table className="w-full text-sm table-mono">
           <thead className="bg-neutral-100 text-[11px]">
@@ -689,6 +694,7 @@ export default function Orders({ mode }) {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Hidden print area */}
       <div id="print-area" style={{ position:"absolute", left:"-9999px", top:0 }}>
