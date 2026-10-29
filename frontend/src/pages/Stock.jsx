@@ -6,15 +6,18 @@ import { Download, Upload, Printer, FileText, FileSpreadsheet, Search, Trash2, E
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductSearchSelect from "@/components/ProductSearchSelect";
 import useSubmitLock from "@/hooks/useSubmitLock";
+import { getStockHistoryRows } from "@/lib/stockHistory";
 
 const KIND_STYLE = {
   ENTRADA: "bg-green-100 text-green-800", SAIDA: "bg-red-100 text-red-800", AVARIA: "bg-red-200 text-red-900",
   DESMONTAGEM_SAIDA: "bg-amber-100 text-amber-800", DESMONTAGEM_ENTRADA: "bg-lime-100 text-lime-800",
   MONTAGEM_SAIDA: "bg-orange-100 text-orange-800", MONTAGEM_ENTRADA: "bg-blue-100 text-blue-800",
+  SEM_BAIXA: "bg-amber-200 text-amber-950",
 };
 const KIND_LABEL = {
   DESMONTAGEM_SAIDA: "Desmont. (−)", DESMONTAGEM_ENTRADA: "Desmont. (+)",
   MONTAGEM_SAIDA: "Montagem (−)", MONTAGEM_ENTRADA: "Montagem (+)",
+  SEM_BAIXA: "Sem baixa",
 };
 const BLANK = { product_id: "", size: "", qty: 1, nf: "", reason: "", kind: "ENTRADA" };
 const BLANK_ENTRY_ITEM = { product_id: "", size: "", qty: 1 };
@@ -204,29 +207,12 @@ export default function Stock() {
     setSelectedEntryGroups(new Set());
   };
   const movs = useMemo(() => {
-    const filtered = movements.filter((movement) => (
-      !q || `${movement.product_name} ${movement.reason || ""} ${movement.sku || ""} ${movement.nf || ""}`.toLowerCase().includes(q.toLowerCase())
+    const search = q.trim().toLocaleLowerCase();
+    return getStockHistoryRows(movements, orders).filter((movement) => (
+      !search || `${movement.product_name} ${movement.reason || ""} ${movement.sku || ""} ${movement.nf || ""} ${movement.order_number || ""}`
+        .toLocaleLowerCase().includes(search)
     ));
-    const grouped = new Map();
-
-    filtered.forEach((movement) => {
-      const isOrderDismantling = movement.order_id
-        && ["DESMONTAGEM_SAIDA", "DESMONTAGEM_ENTRADA", "MONTAGEM_SAIDA", "MONTAGEM_ENTRADA"].includes(movement.kind);
-      const key = isOrderDismantling
-        ? JSON.stringify([movement.order_id, movement.product_id, movement.size, movement.kind, movement.reason])
-        : movement.id;
-      const existing = grouped.get(key);
-
-      if (existing) {
-        existing.qty += Number(movement.qty || 0);
-        existing.groupedCount += 1;
-      } else {
-        grouped.set(key, { ...movement, qty: Number(movement.qty || 0), groupedCount: 1 });
-      }
-    });
-
-    return [...grouped.values()];
-  }, [movements, q]);
+  }, [movements, orders, q]);
 
   return (
     <div data-testid="stock-page">
@@ -334,20 +320,28 @@ export default function Stock() {
           </table>
         ) : (
           <table className="lm-table">
-            <thead><tr><th>Data</th><th>Tipo</th><th>Produto</th><th>Tam</th><th>Qtd</th><th>Motivo</th><th>NF</th><th></th></tr></thead>
+            <thead><tr><th>Data</th><th>Tipo</th><th>Produto</th><th>Tam</th><th>Qtd.</th><th>Venda</th><th>Motivo</th><th>NF</th><th></th></tr></thead>
             <tbody>
               {movs.map((m) => (
                 <tr key={m.id}>
                   <td className="text-xs whitespace-nowrap">{formatDate(m.created_at)}</td>
                   <td><span className={`badge ${KIND_STYLE[m.kind] || "bg-neutral-200"}`}>{KIND_LABEL[m.kind] || m.kind}</span></td>
-                  <td className="font-head">{m.product_name}{m.order_id && <button className="ml-2 inline-flex items-center gap-1 text-xs underline" onClick={() => printOrder(m.order_id)} title="Abrir impressão A4 do pedido"><ExternalLink size={12} />Pedido #{orders.find((o) => o.id === m.order_id)?.number || ""}</button>}</td>
+                  <td className="font-head">{m.product_name}{m.order_id && <button className="ml-2 inline-flex items-center gap-1 text-xs underline" onClick={() => printOrder(m.order_id)} title="Abrir impressão A4 do pedido"><ExternalLink size={12} />Pedido #{m.order_number || orders.find((o) => o.id === m.order_id)?.number || ""}</button>}</td>
                   <td><span className="chip">{m.size}</span></td>
                   <td>{m.qty}{m.groupedCount > 1 && <div className="text-xs text-neutral-500">{m.groupedCount} movimentações</div>}</td>
+                  <td>
+                    {m.expectedQty == null ? "—" : (
+                      <span className={m.reconciliation === "matched" ? "text-green-800" : "font-semibold text-red-700"} data-testid="stock-history-reconciliation">
+                        {m.expectedQty}
+                        {m.reconciliation === "matched" ? " · OK" : m.reconciliation === "missing" ? " · Sem saída" : ` · Histórico ${m.qty > m.expectedQty ? "+" : ""}${m.qty - m.expectedQty}`}
+                      </span>
+                    )}
+                  </td>
                   <td className="text-sm">{m.reason}</td><td>{m.nf}</td>
                   <td>{!m.order_id && <button className="p-1 hover:bg-red-100 rounded" onClick={() => delMov(m.id)} aria-label="Excluir movimentação e estornar estoque"><Trash2 size={14} /></button>}</td>
                 </tr>
               ))}
-              {movs.length === 0 && <tr><td colSpan={8} className="text-center text-neutral-500 py-8">Sem movimentações.</td></tr>}
+              {movs.length === 0 && <tr><td colSpan={9} className="text-center text-neutral-500 py-8">Sem movimentações.</td></tr>}
             </tbody>
           </table>
         )}

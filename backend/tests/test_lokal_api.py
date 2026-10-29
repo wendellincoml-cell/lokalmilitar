@@ -266,6 +266,45 @@ class TestOrders:
         assert len(order_movements) == 10
         assert sum(movement["qty"] for movement in order_movements if movement["kind"] == "SAIDA") == 10
 
+    def test_concurrent_fulfillment_of_same_order_is_applied_once(self, admin):
+        product = _prod(admin, "TEST_Baixa_Pedido_Duplicada", [{"size": "U", "stock": 5}])
+        created = admin.post(
+            f"{BASE_URL}/api/orders",
+            json={
+                "customer_name": "TEST_Baixa_Pedido_Duplicada",
+                "status": "Separado",
+                "items": [{
+                    "product_id": product["id"],
+                    "name": product["name"],
+                    "size": "U",
+                    "qty": 2,
+                    "unit_price": 10,
+                }],
+            },
+        )
+        assert created.status_code == 200, created.text
+        order = created.json()
+        CREATED["orders"].append(order["id"])
+
+        def fulfill():
+            return requests.post(
+                f"{BASE_URL}/api/orders/{order['id']}/fulfill",
+                json={"delivery_type": "RETIRADA"},
+                timeout=15,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _: fulfill(), range(2)))
+
+        assert sum(response.status_code == 200 for response in responses) == 1, [
+            (response.status_code, response.text) for response in responses
+        ]
+        assert _stock(admin, product["id"], "U") == 3
+        movements = admin.get(f"{BASE_URL}/api/stock_movements").json()
+        order_movements = [movement for movement in movements if movement.get("order_id") == order["id"]]
+        assert len(order_movements) == 1
+        assert order_movements[0]["kind"] == "SAIDA" and order_movements[0]["qty"] == 2
+
     def test_separated_status_tracks_when_order_was_separated(self, admin):
         created = admin.post(
             f"{BASE_URL}/api/orders",

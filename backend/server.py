@@ -1224,7 +1224,7 @@ async def _apply_order_stock(order: dict):
         await db.orders.update_one({"id": order["id"]}, {"$set": {"log": log}})
     await db.orders.update_one({"id": order["id"]}, {"$set": {"stock_applied": True}})
 
-async def _reverse_order_stock(order_id: str):
+async def _reverse_order_stock(order_id: str, mark_unapplied: bool = True):
     movements = await db.stock_movements.find({"order_id": order_id}).to_list(10000)
     for movement in movements:
         await _change_stock(
@@ -1234,7 +1234,8 @@ async def _reverse_order_stock(order_id: str):
         )
     if movements:
         await db.stock_movements.delete_many({"order_id": order_id})
-    await db.orders.update_one({"id": order_id}, {"$set": {"stock_applied": False}})
+    if mark_unapplied:
+        await db.orders.update_one({"id": order_id}, {"$set": {"stock_applied": False}})
 
 async def _cancel_order_stock(order_id: str):
     movements = await db.stock_movements.find({"order_id": order_id}).to_list(10000)
@@ -1255,6 +1256,13 @@ async def _cancel_order_stock(order_id: str):
 
 async def _has_order_stock_movements(order_id: str) -> bool:
     return await db.stock_movements.count_documents({"order_id": order_id}) > 0
+
+async def _claim_order_stock_application(order_id: str) -> bool:
+    result = await db.orders.update_one(
+        {"id": order_id, "stock_applied": {"$ne": True}},
+        {"$set": {"stock_applied": True}},
+    )
+    return result.matched_count > 0
 
 def _order_is_fulfilled(order: dict) -> bool:
     return order.get("status") in ("Entregue", "Retirado")
@@ -1346,7 +1354,15 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
     if old_stock_applied is None:
         old_stock_applied = await _has_order_stock_movements(oid)
     old_stock_fields = _stock_relevant_order_fields(old)
-    await db.orders.update_one({"id": oid}, {"$set": payload})
+    if allow_fulfillment:
+        update_result = await db.orders.update_one(
+            {"id": oid, "status": old.get("status")},
+            {"$set": payload},
+        )
+        if not update_result.matched_count:
+            raise HTTPException(409, "O pedido foi alterado por outra operação; atualize a tela e tente novamente")
+    else:
+        await db.orders.update_one({"id": oid}, {"$set": payload})
     doc = await db.orders.find_one({"id": oid}, {"_id": 0})
     stock_fields_changed = old_stock_fields != _stock_relevant_order_fields(doc)
     cancelling_order = doc.get("status") == "Cancelado"
@@ -1363,8 +1379,10 @@ async def _update_order(oid: str, payload: dict, user: dict, allow_fulfillment: 
         await _reverse_order_stock(oid)
         old_stock_applied = False
     if not old_stock_applied and _order_is_fulfilled(doc) and doc.get("type") in ("VENDA", "TROCA", "DEVOLUCAO"):
+        if not await _claim_order_stock_application(oid):
+            raise HTTPException(409, "O estoque deste pedido está sendo atualizado; atualize a tela e tente novamente")
         if await _has_order_stock_movements(oid):
-            await _reverse_order_stock(oid)
+            await _reverse_order_stock(oid, mark_unapplied=False)
         await _apply_order_stock(doc)
         doc["stock_applied"] = True
     # Commissions start when a sale is approved; stock moves only on delivery or pickup.
@@ -1389,8 +1407,10 @@ async def fulfill_order(oid: str, payload: dict, user: dict = Depends(get_curren
             if stock_applied is None:
                 stock_applied = await _has_order_stock_movements(oid)
             if not stock_applied:
+                if not await _claim_order_stock_application(oid):
+                    raise HTTPException(400, "O pedido já está sendo atualizado")
                 if await _has_order_stock_movements(oid):
-                    await _reverse_order_stock(oid)
+                    await _reverse_order_stock(oid, mark_unapplied=False)
                 await _apply_order_stock(order)
                 return await db.orders.find_one({"id": oid}, {"_id": 0})
         raise HTTPException(400, "O pedido já foi entregue ou retirado")
