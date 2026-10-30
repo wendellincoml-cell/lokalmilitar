@@ -28,16 +28,15 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 }[character]));
 
-const openPrint = (title, rows, totals) => {
+const openPrint = (title, rows) => {
   const w = window.open("", "_blank");
   w.document.write(`<html><head><title>${title}</title><style>
     body{font-family:Arial,sans-serif;padding:20px}h1{font-size:18px;margin:0 0 4px;color:#4B5320}
     table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#111;color:#D9C9A0;text-align:left}
-    th,td{border:1px solid #444;padding:4px 6px;font-size:11px}.tot{text-align:right;font-weight:700;margin-top:8px}</style></head><body>
+    th,td{border:1px solid #444;padding:4px 6px;font-size:11px}</style></head><body>
     <h1>LOKAL MILITAR — ${title}</h1><div style="font-size:11px">Emitido em ${new Date().toLocaleString("pt-BR")}</div>
-    <table><thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Qtd</th><th>Custo</th><th>Venda</th><th>Local</th></tr></thead>
-    <tbody>${rows.map((r) => `<tr><td>${r.sku || ""}</td><td>${r.name}</td><td>${r.cat}</td><td>${r.size}</td><td>${r.stock}</td><td>${formatBRL(r.cost)}</td><td>${formatBRL(r.price)}</td><td>${r.shelf || ""}</td></tr>`).join("")}</tbody></table>
-    <div class="tot">Total de itens: ${totals.items} · Valor em estoque (venda): ${formatBRL(totals.value)}</div>
+    <table><thead><tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Tamanho</th><th>Quantidade</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr><td>${r.sku || ""}</td><td>${r.name}</td><td>${r.cat}</td><td>${r.size}</td><td>${r.stock}</td></tr>`).join("")}</tbody></table>
     <script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();
 };
@@ -64,6 +63,9 @@ export default function Stock() {
   const [entrySearch, setEntrySearch] = useState("");
   const [entryDate, setEntryDate] = useState("");
   const [selectedEntryGroups, setSelectedEntryGroups] = useState(() => new Set());
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
+  const [reconciliationSearch, setReconciliationSearch] = useState("");
+  const [countedQuantities, setCountedQuantities] = useState({});
   const { run: withSubmitLock, isPending } = useSubmitLock();
 
   const load = async () => {
@@ -117,8 +119,78 @@ export default function Stock() {
   const printBy = (byCat) => {
     if (byCat && !cat) return toast.error("Selecione uma categoria no filtro");
     const list = byCat ? allRows.filter((r) => r.cat === cat) : allRows;
-    openPrint(byCat ? `Estoque · ${cat}` : "Estoque completo", list, totals(list));
+    openPrint(byCat ? `Estoque · ${cat}` : "Estoque completo", list);
   };
+  const printReconciliationSheet = () => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return toast.error("Permita pop-ups para imprimir a conferência");
+    const tableRows = allRows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.name)}</td>
+        <td>${escapeHtml(row.size)}</td>
+        <td>${escapeHtml(row.stock)}</td>
+        <td class="count-cell"></td>
+      </tr>`).join("");
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Conferência de estoque</title>
+      <style>
+        body{font:12px Arial,sans-serif;padding:24px;color:#222}
+        h1{font-size:18px;color:#354017;margin:0 0 6px}
+        p{margin:0 0 12px}
+        table{width:100%;border-collapse:collapse}
+        th,td{border:1px solid #888;padding:6px;text-align:left}
+        th{background:#eee}
+        .count-cell{width:22%;height:26px}
+        @media print{body{padding:0}}
+      </style></head><body>
+      <h1>LOKAL MILITAR — Conferência de Estoque</h1>
+      <p>Emitido em ${escapeHtml(new Date().toLocaleString("pt-BR"))}</p>
+      <table><thead><tr><th>Produto</th><th>Tamanho</th><th>Quantidade atual</th><th>Contagem</th></tr></thead>
+      <tbody>${tableRows}</tbody></table>
+      <script>window.onload=()=>window.print()</script></body></html>`);
+    printWindow.document.close();
+  };
+  const submitReconciliation = () => withSubmitLock("stock-reconciliation", async () => {
+    const enteredRows = allRows.flatMap((row) => {
+      const rawQuantity = countedQuantities[row.id];
+      if (rawQuantity === undefined || rawQuantity.trim() === "") return [];
+      const quantity = Number(rawQuantity);
+      if (!Number.isFinite(quantity) || quantity < 0) return [{ invalid: true }];
+      return [{ product_id: row.product_id, size: row.size, quantity }];
+    });
+    if (!enteredRows.length) return toast.error("Informe a contagem de ao menos um tamanho");
+    if (enteredRows.some((row) => row.invalid)) return toast.error("Informe quantidades válidas e iguais ou maiores que zero");
+
+    let updated;
+    try {
+      ({ data: { updated } } = await api.post("/stock_movements/reconcile", {
+        items: enteredRows,
+      }));
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Não foi possível aplicar a conferência do estoque");
+      if (error.response?.status === 409) {
+        setCountedQuantities({});
+        try {
+          await load();
+        } catch {
+          toast.error("Não foi possível atualizar o estoque após o conflito. Atualize a página antes de tentar novamente.");
+        }
+      }
+      return;
+    }
+
+    toast.success(updated ? `${updated} quantidade(s) corrigida(s) no estoque` : "As quantidades informadas já estavam corretas");
+    setCountedQuantities({});
+    setReconciliationOpen(false);
+    try {
+      await load();
+    } catch {
+      toast.error("A conferência foi aplicada, mas não foi possível atualizar os dados da tela.");
+    }
+  });
+  const reconciliationRows = allRows.filter((row) => (
+    !reconciliationSearch
+    || `${row.name} ${row.sku} ${row.size}`.toLocaleLowerCase().includes(reconciliationSearch.trim().toLocaleLowerCase())
+  ));
   const exportExcel = () => {
     const head = ["SKU", "Produto", "Categoria", "Tamanho", "Qtd", "Custo", "Venda", "Local"];
     const csv = [head, ...rows.map((r) => [r.sku, r.name, r.cat, r.size, r.stock, r.cost, r.price, r.shelf || ""])]
@@ -250,8 +322,9 @@ export default function Stock() {
 
       <div className="lm-card p-3 flex flex-wrap gap-2 mb-4">
         <button className="lm-btn lm-btn-dark" onClick={() => printBy(false)} data-testid="btn-print-full"><Printer size={15} />Imprimir estoque completo A4</button>
+        <button className="lm-btn lm-btn-outline" onClick={() => { setCountedQuantities({}); setReconciliationSearch(""); setReconciliationOpen(true); }} data-testid="btn-stock-reconciliation"><FileText size={15} />Conferência de estoque</button>
         <button className="lm-btn lm-btn-dark" onClick={() => printBy(true)} data-testid="btn-print-cat"><Printer size={15} />Imprimir estoque por categoria</button>
-        <button className="lm-btn lm-btn-gold" onClick={() => openPrint("Estoque", rows, totals(rows))} data-testid="btn-export-pdf"><FileText size={15} />Exportar PDF</button>
+        <button className="lm-btn lm-btn-gold" onClick={() => openPrint("Estoque", rows)} data-testid="btn-export-pdf"><FileText size={15} />Exportar PDF</button>
         <button className="lm-btn lm-btn-outline" onClick={exportExcel} data-testid="btn-export-excel"><FileSpreadsheet size={15} />Exportar Excel</button>
       </div>
 
@@ -534,6 +607,70 @@ export default function Stock() {
                 <Printer size={15} />Imprimir selecionadas ({selectedEntryGroups.size})
               </button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reconciliationOpen} onOpenChange={setReconciliationOpen}>
+        <DialogContent className="max-w-4xl" data-testid="stock-reconciliation-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-head">Conferência de estoque</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-neutral-600">
+            Imprima a folha para contagem ou informe a quantidade conferida. Campos em branco não alteram o estoque.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="lm-input min-w-[200px] flex-1"
+              placeholder="Buscar produto ou tamanho..."
+              value={reconciliationSearch}
+              onChange={(event) => setReconciliationSearch(event.target.value)}
+              data-testid="stock-reconciliation-search"
+            />
+            <button type="button" className="lm-btn lm-btn-dark" onClick={printReconciliationSheet} data-testid="btn-print-stock-reconciliation">
+              <Printer size={15} />Imprimir folha de contagem
+            </button>
+          </div>
+          <div className="max-h-[55vh] overflow-auto rounded border">
+            <table className="lm-table">
+              <thead className="sticky top-0">
+                <tr><th>Produto</th><th>Tamanho</th><th>Quantidade atual</th><th>Contagem</th></tr>
+              </thead>
+              <tbody>
+                {reconciliationRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.name}</td>
+                    <td>{row.size}</td>
+                    <td>{row.stock}</td>
+                    <td>
+                      <input
+                        className="lm-input !w-32"
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={countedQuantities[row.id] ?? ""}
+                        onChange={(event) => setCountedQuantities((current) => ({ ...current, [row.id]: event.target.value }))}
+                        aria-label={`Contagem de ${row.name}, tamanho ${row.size}`}
+                        data-testid={`stock-count-${row.id}`}
+                      />
+                    </td>
+                  </tr>
+                ))}
+                {reconciliationRows.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-neutral-500">Nenhum tamanho encontrado.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="lm-btn lm-btn-outline" onClick={() => setReconciliationOpen(false)}>Cancelar</button>
+            <button
+              type="button"
+              className="lm-btn lm-btn-olive"
+              onClick={submitReconciliation}
+              disabled={isPending("stock-reconciliation")}
+              data-testid="btn-submit-stock-reconciliation"
+            >
+              {isPending("stock-reconciliation") ? "Aplicando..." : "Finalizar e corrigir estoque"}
+            </button>
           </div>
         </DialogContent>
       </Dialog>

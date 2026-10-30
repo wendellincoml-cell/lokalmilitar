@@ -192,6 +192,50 @@ class TestStock:
         hist = admin.get(f"{BASE_URL}/api/stock_movements").json()
         assert len([h for h in hist if h["product_id"] == p["id"]]) >= 3
 
+    def test_stock_reconciliation_sets_counted_quantities_and_logs_differences(self, admin):
+        product = _prod(admin, "TEST_Conferencia", [
+            {"size": "P", "stock": 2},
+            {"size": "M", "stock": 5},
+            {"size": "G", "stock": 1},
+        ])
+
+        response = admin.post(
+            f"{BASE_URL}/api/stock_movements/reconcile",
+            json={"items": [
+                {"product_id": product["id"], "size": "P", "quantity": 4},
+                {"product_id": product["id"], "size": "M", "quantity": 3},
+                {"product_id": product["id"], "size": "G", "quantity": 1},
+            ]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"updated": 2}
+        assert _stock(admin, product["id"], "P") == 4
+        assert _stock(admin, product["id"], "M") == 3
+        assert _stock(admin, product["id"], "G") == 1
+        movements = [
+            movement for movement in admin.get(f"{BASE_URL}/api/stock_movements").json()
+            if movement["product_id"] == product["id"]
+        ]
+        assert {(movement["size"], movement["kind"], movement["qty"], movement["reason"]) for movement in movements} == {
+            ("P", "ENTRADA", 2, "Ajuste por conferência de estoque"),
+            ("M", "SAIDA", 2, "Ajuste por conferência de estoque"),
+        }
+
+    def test_stock_reconciliation_rejects_duplicate_rows_without_changing_stock(self, admin):
+        product = _prod(admin, "TEST_Conferencia duplicada", [{"size": "U", "stock": 3}])
+
+        response = admin.post(
+            f"{BASE_URL}/api/stock_movements/reconcile",
+            json={"items": [
+                {"product_id": product["id"], "size": "U", "quantity": 4},
+                {"product_id": product["id"], "size": "U", "quantity": 5},
+            ]},
+        )
+
+        assert response.status_code == 400
+        assert _stock(admin, product["id"], "U") == 3
+
 
 # --- Orders / commission / desmontagem / trocas ---
 class TestOrders:

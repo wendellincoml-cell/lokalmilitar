@@ -373,6 +373,14 @@ class StockMovement(BaseModel):
     order_id: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
+class StockCountItem(BaseModel):
+    product_id: str
+    size: str
+    quantity: float = Field(ge=0, allow_inf_nan=False)
+
+class StockCountRequest(BaseModel):
+    items: List[StockCountItem]
+
 class Expense(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=new_id)
@@ -1079,6 +1087,65 @@ async def create_stock(payload: dict, user: dict = Depends(get_current_user)):
     delta = _stock_movement_delta(doc)
     await _change_stock(doc["product_id"], doc.get("size"), delta)
     return strip_mongo(doc)
+
+@api.post("/stock_movements/reconcile")
+async def reconcile_stock(payload: StockCountRequest, user: dict = Depends(get_current_user)):
+    if not payload.items:
+        raise HTTPException(400, "Informe ao menos uma quantidade para conferência")
+
+    seen_items = set()
+    validated_items = []
+    for item in payload.items:
+        key = (item.product_id, item.size)
+        if key in seen_items:
+            raise HTTPException(400, "O mesmo produto e tamanho foi informado mais de uma vez")
+        seen_items.add(key)
+
+        product = await db.products.find_one({"id": item.product_id}, {"_id": 0})
+        if not product:
+            raise HTTPException(404, f"Produto não encontrado: {item.product_id}")
+        size = next((entry for entry in product.get("sizes", []) if entry.get("size") == item.size), None)
+        if size is None:
+            raise HTTPException(400, f"Tamanho {item.size} não cadastrado para {product.get('name')}")
+        current_quantity = float(size.get("stock", 0))
+        validated_items.append((item, product, current_quantity))
+
+    updated = 0
+    for item, product, current_quantity in validated_items:
+        difference = item.quantity - current_quantity
+        if difference == 0:
+            continue
+
+        result = await db.products.update_one(
+            {
+                "id": item.product_id,
+                "sizes": {"$elemMatch": {"size": item.size, "stock": current_quantity}},
+            },
+            {"$set": {"sizes.$.stock": item.quantity}},
+        )
+        if not result.matched_count:
+            raise HTTPException(
+                409,
+                f"O estoque de {product.get('name')} tamanho {item.size} mudou durante a conferência. "
+                f"{updated} ajuste(s) anterior(es) já foram aplicados; atualize os dados e confira novamente.",
+            )
+
+        await db.stock_movements.insert_one({
+            "id": new_id(),
+            "product_id": product["id"],
+            "product_name": product.get("name"),
+            "sku": product.get("sku"),
+            "size": item.size,
+            "stock_size": item.size,
+            "qty": abs(difference),
+            "kind": "ENTRADA" if difference > 0 else "SAIDA",
+            "reason": "Ajuste por conferência de estoque",
+            "order_id": None,
+            "created_at": now_iso(),
+        })
+        updated += 1
+
+    return {"updated": updated}
 
 @api.delete("/stock_movements/{mid}")
 async def del_stock(mid: str, user: dict = Depends(get_current_user)):
